@@ -2,6 +2,16 @@
 
 Project belajar **API technologies** dari Beginner sampai Expert. Setiap teknologi punya working code (server + client) + README penjelasan konsep. Bukan teori doang — semua code sudah di-test dan verified jalan.
 
+## Highlights
+
+| Resource | Isi |
+|----------|-----|
+| [Learning Map](#learning-map) | 16 modul dari Beginner sampai Expert |
+| [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
+| [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
+| [Scalability Rating](#scalability-rating) | 16 teknologi dirating across 5 dimensi scalability |
+| [FAQ](#faq) | 20+ pertanyaan umum per level |
+
 ## Stack
 
 - **Runtime**: Node.js + TypeScript

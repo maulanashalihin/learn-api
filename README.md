@@ -9,6 +9,7 @@ Project belajar **API technologies** dari Beginner sampai Expert. Setiap teknolo
 | [Learning Map](#learning-map) | 16 modul dari Beginner sampai Expert |
 | [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
 | [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
+| [Scalability Rating](docs/scalability-rating.md) | 16 teknologi dirating across 5 dimensi scalability |
 | [SQLite Replication Notes](docs/sqlite-replication-notes.md) | Kafka CDC, Debezium, Litestream WAL, multi-node tools |
 | [FAQ](#faq) | 20+ pertanyaan umum per level |
 

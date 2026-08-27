@@ -1,0 +1,50 @@
+{
+  "name": "learn-api",
+  "version": "1.0.0",
+  "description": "Hands-on learning: API technologies ranked by learning curve",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "rest": "tsx 01-rest/server.ts",
+    "graphql": "tsx 02-graphql/server.ts",
+    "webhook:receiver": "tsx 03-webhooks/receiver.ts",
+    "webhook:sender": "tsx 03-webhooks/sender.ts",
+    "sse": "tsx 04-sse/server.ts",
+    "ws": "tsx 05-websockets/server.ts",
+    "ws:client": "tsx 05-websockets/client.ts",
+ "grpc:server": "tsx 06-grpc/server.ts",
+    "grpc:client": "tsx 06-grpc/client.ts",
+    "trpc": "tsx 07-trpc/server.ts",
+    "trpc:client": "tsx 07-trpc/client.ts",
+    "gateway": "tsx 08-api-gateway/gateway.ts",
+    "gateway:user": "tsx 08-api-gateway/user-service.ts",
+    "mq:producer": "tsx 09-message-queues/producer.ts",
+    "mq:consumer": "tsx 09-message-queues/consumer.ts",
+    "kafka:producer": "tsx 10-kafka/producer.ts",
+    "kafka:consumer": "tsx 10-kafka/consumer.ts",
+    "eda": "tsx 11-event-driven/demo.ts",
+    "dist-sys": "tsx 13-distributed-systems/demo.ts",
+    "eventual": "tsx 14-eventual-consistency/demo.ts",
+    "consensus": "tsx 15-consensus/demo.ts",
+    "dist-tx": "tsx 16-distributed-transactions/demo.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@apollo/server": "^4.11.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@trpc/client": "^11.18.0",
+    "@trpc/server": "^11.18.0",
+    "express": "^4.21.0",
+    "graphql": "^16.9.0",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

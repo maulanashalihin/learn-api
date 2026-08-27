@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+// ─── Protocol Buffers Schema ────────────────────────────────────
+//
+// File .proto = kontrak yang mendefinisikan:
+//   1. Message types = struktur data (seperti struct/class)
+//   2. Service = kumpulan RPC methods (seperti interface)
+//
+// gRPC = Google RPC. Beda dengan REST/GraphQL yang pakai HTTP+JSON,
+// gRPC pakai Protocol Buffers (binary serialization) + HTTP/2.
+//
+// Keuntungan: lebih cepat, lebih kecil, type-safe, support streaming.
+
+package taskapi;
+
+// ─── Message Types ──────────────────────────────────────────────
+// Field numbers (1, 2, 3) = identifier di binary encoding.
+// Jangan ubah number field yang sudah ada! Tambah field baru = aman.
+
+message Task {
+  string id = 1;
+  string title = 2;
+  bool done = 3;
+  string created_at = 4;
+}
+
+message CreateTaskRequest {
+  string title = 1;
+}
+
+message GetTaskRequest {
+  string id = 1;
+}
+
+message UpdateTaskRequest {
+  string id = 1;
+  string title = 2;
+  bool done = 3;
+}
+
+message DeleteTaskRequest {
+  string id = 1;
+}
+
+message DeleteTaskResponse {
+  bool success = 1;
+}
+
+message ListTasksRequest {
+  // Optional filter
+  bool done = 1;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;  // repeated = array/list
+}
+
+// ─── Service Definition ─────────────────────────────────────────
+// 4 method: Create, Get, List, Update, Delete (CRUD)
+// Tipe RPC:
+//   unary    = request → response (seperti REST)
+//   server streaming = request → stream of responses
+//   client streaming = stream of requests → response
+//   bidi streaming   = stream of requests ↔ stream of responses
+
+service TaskService {
+  // Unary RPC — satu request, satu response
+  rpc CreateTask(CreateTaskRequest) returns (Task);
+  rpc GetTask(GetTaskRequest) returns (Task);
+  rpc UpdateTask(UpdateTaskRequest) returns (Task);
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+
+  // Server streaming RPC — satu request, stream of responses
+  // Server kirim multiple Task satu per satu
+  rpc ListTasks(ListTasksRequest) returns (stream Task);
+}

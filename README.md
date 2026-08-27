@@ -172,6 +172,9 @@ learn-api/
 │
 ├── faq/
 │   └── README.md             # FAQ: common questions per level + general
+│
+├── docs/
+│   └── scalability-rating.md # Scalability rating: 16 techs across 5 dimensions
 ├── package.json              # Scripts for all modules
 └── tsconfig.json             # Shared TypeScript config
 ```
@@ -287,6 +290,21 @@ Need to atomically update DB + publish event?
 
 Coordinated transaction across resources with blocking?
   → 2PC (prepare + commit, but coordinator crash = blocked)
+
+## Scalability Rating
+
+Rating scalability semua teknologi across 5 dimensi (horizontal, throughput, stateless, geographic, backpressure). Lihat: [`docs/scalability-rating.md`](docs/scalability-rating.md)
+
+| Rank | Tech | Score | Why |
+|:---:|------|:---:|-----|
+| 1 | Kafka | 9.4 | Partition = parallelism, linear scale |
+| 2 | Event-Driven (CQRS) | 8.6 | Read side scale independent from write |
+| 3 | Eventual Consistency (CRDTs) | 8.4 | No coordination, multi-region |
+| 4 | Message Queues | 8.0 | Competing consumers, backpressure |
+| 5 | Microservices | 7.6 | Scale each service independently |
+| ... | ... | ... | ... |
+| 15 | Consensus (Raft) | 4.6 | Leader = bottleneck, by design |
+| 16 | Distributed Transactions | 3.6 | Blocking locks, by design |
 
 ## FAQ
 

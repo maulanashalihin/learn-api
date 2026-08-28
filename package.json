@@ -27,7 +27,8 @@
     "eventual": "tsx 14-eventual-consistency/demo.ts",
     "consensus": "tsx 15-consensus/demo.ts",
     "dist-tx": "tsx 16-distributed-transactions/demo.ts",
-    "scale-sqlite": "tsx 17-scaling-sqlite/demo.ts",
+    "walsync": "tsx 17-walsync/demo.ts",
+    "cr-sqlite": "bun run 18-cr-sqlite/demo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

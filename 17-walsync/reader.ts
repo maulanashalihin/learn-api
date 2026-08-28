@@ -4,7 +4,7 @@
 // walsync (background process) terima WAL dari primary → apply ke DB.
 //
 // Jalankan:
-//   npx tsx 17-scaling-sqlite/reader.ts
+//   npx tsx 17-walsync/reader.ts
 //
 // Prerequisite: start walsync replica dulu
 //   ./walsync -mode replica -db /tmp/walsync-demo.db -listen :9193

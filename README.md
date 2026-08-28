@@ -9,7 +9,7 @@ Project belajar **API technologies** dari Beginner sampai Production. Setiap tek
 | [Learning Map](#learning-map) | 17 modul dari Beginner sampai Production |
 | [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
 | [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
-| [Scalability Rating](docs/scalability-rating.md) | 17 teknologi dirating across 5 dimensi scalability |
+| [Scalability Rating](docs/scalability-rating.md) | 18 teknologi dirating across 5 dimensi scalability |
 | [SQLite Replication Notes](docs/sqlite-replication-notes.md) | Kafka CDC, Debezium, Litestream WAL, multi-node tools |
 | [FAQ](#faq) | 20+ pertanyaan umum per level |
 
@@ -48,7 +48,8 @@ Project belajar **API technologies** dari Beginner sampai Production. Setiap tek
   16-distributed-transactions/ Distributed Transactions  2PC, Saga, transactional outbox
 
 🟣 PRODUCTION ──────────────────────────────────────────── ✅ DONE
-  17-scaling-sqlite/          Scaling SQLite           walsync: WAL shipping replication, single-writer + multi-reader
+  17-walsync/                 walsync                 WAL shipping replication, single-writer + multi-reader
+  18-cr-sqlite/               cr-sqlite               CRDT multi-writer replication, write di mana saja, converge
 ```
 
 ## Quick Start
@@ -77,7 +78,8 @@ npm run dist-sys         # 13-dist-sys:   CAP theorem, consistency models, failu
 npm run eventual         # 14-eventual:   read repair, Merkle trees, CRDTs, vector clocks
 npm run consensus        # 15-consensus:  Raft leader election, log replication, partitions
 npm run dist-tx          # 16-dist-tx:    2PC, Saga, transactional outbox
-npm run scale-sqlite    # 17-scaling-sqlite: walsync WAL shipping replication demo
+npm run walsync         # 17-walsync:   walsync WAL shipping replication demo
+npm run cr-sqlite       # 18-cr-sqlite: cr-sqlite CRDT multi-writer replication demo
 
 # Typecheck everything
 npm run typecheck
@@ -185,10 +187,15 @@ learn-api/
 │   ├── demo.ts              # Orchestrates: 2PC + Saga + Outbox scenarios
 │   └── README.md
 │
-├── 17-scaling-sqlite/
+├── 17-walsync/
 │   ├── writer.ts            # Express app (primary): CRUD tasks, write ke embedded SQLite
 │   ├── reader.ts            # Express app (replica): read dari SQLite readonly, auto-reconnect
 │   ├── demo.ts              # Orchestration: start walsync + apps, write, verify replication
+│   └── README.md
+│
+├── 18-cr-sqlite/
+│   ├── replicate.ts          # Bun app: HTTP server + CRDT changeset sync, multi-writer
+│   ├── demo.ts               # 2-node local demo: write both nodes, verify convergence + conflict
 │   └── README.md
 │
 ├── faq/
@@ -381,7 +388,7 @@ Pertanyaan yang sering muncul, dikelompokkan per level. Lihat: [`faq/README.md`]
 
 ### General
 
-- [Mana yang paling sering dipakai di production?](faq/README.md#17-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
+- [Mana yang paling sering dipakai di production?](faq/README.md#18-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
 - [Kenapa pakai in-memory, bukan database beneran?](faq/README.md#project-ini-pakai-in-memory-bukan-database-beneran-kenapa)
 - [Urutan belajar yang recommended?](faq/README.md#urutan-belajar-yang-recommended)
 - [Bisakah skip Expert level?](faq/README.md#bisakah-saya-skip-expert-level)

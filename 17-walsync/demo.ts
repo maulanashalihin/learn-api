@@ -13,7 +13,7 @@
 //   chmod +x ./walsync
 //
 // Jalankan:
-//   npx tsx 17-scaling-sqlite/demo.ts
+//   npx tsx 17-walsync/demo.ts
 //
 // Clean up:
 //   rm -f /tmp/walsync-demo.db*
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
 
 	// ── Step 2: Start writer app (creates DB + table) ──
 	console.log("── Step 2: Start writer app (primary) ────────────────────");
-	start("writer", "npx", ["tsx", "17-scaling-sqlite/writer.ts"], { DB_PATH: PRIMARY_DB, PORT: String(WRITER_PORT) });
+	start("writer", "npx", ["tsx", "17-walsync/writer.ts"], { DB_PATH: PRIMARY_DB, PORT: String(WRITER_PORT) });
 	await sleep(2000);
 	console.log("  ✓ Writer app on http://localhost:" + WRITER_PORT);
 	console.log();
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
 
 	// ── Step 4: Start reader app (replica) ──
 	console.log("── Step 4: Start reader app (replica) ────────────────────");
-	start("reader", "npx", ["tsx", "17-scaling-sqlite/reader.ts"], { DB_PATH: REPLICA_DB, PORT: String(READER_PORT) });
+	start("reader", "npx", ["tsx", "17-walsync/reader.ts"], { DB_PATH: REPLICA_DB, PORT: String(READER_PORT) });
 	await sleep(2000);
 	console.log("  ✓ Reader app on http://localhost:" + READER_PORT);
 	console.log();

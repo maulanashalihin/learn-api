@@ -81,7 +81,7 @@ chmod +x ./walsync
 ### 2. Run demo
 
 ```bash
-npx tsx 17-scaling-sqlite/demo.ts
+npx tsx 17-walsync/demo.ts
 ```
 
 1. Start walsync replica (background, port 9193)
@@ -95,11 +95,11 @@ npx tsx 17-scaling-sqlite/demo.ts
 ```bash
 # Terminal 1: walsync replica + reader app
 ./walsync -mode replica -db /tmp/walsync-demo-replica.db -listen :9193 &
-DB_PATH=/tmp/walsync-demo-replica.db npx tsx 17-scaling-sqlite/reader.ts
+DB_PATH=/tmp/walsync-demo-replica.db npx tsx 17-walsync/reader.ts
 
 # Terminal 2: walsync primary + writer app
 ./walsync -mode primary -db /tmp/walsync-demo-primary.db -replicas 127.0.0.1:9193 &
-DB_PATH=/tmp/walsync-demo-primary.db npx tsx 17-scaling-sqlite/writer.ts
+DB_PATH=/tmp/walsync-demo-primary.db npx tsx 17-walsync/writer.ts
 ```
 
 > **Note:** `-replicas` expects `host:port` (e.g., `127.0.0.1:9193`), NOT `http://host:port`. walsync prepends `http://` internally.

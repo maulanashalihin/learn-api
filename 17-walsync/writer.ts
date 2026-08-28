@@ -4,7 +4,7 @@
 // walsync (background process) ship WAL ke replica secara async.
 //
 // Jalankan:
-//   npx tsx 17-scaling-sqlite/writer.ts
+//   npx tsx 17-walsync/writer.ts
 //
 // Prerequisite: start walsync primary dulu
 //   ./walsync -mode primary -db /tmp/walsync-demo.db -replica http://localhost:9193

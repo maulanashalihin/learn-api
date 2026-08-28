@@ -279,7 +279,10 @@ SQLite di Cloudflare edge network. Akses via Worker binding (internal) atau HTTP
 | **DDL replication** | ✅ | ✅ | ✅ | ✅ (v0.0.7+) | ✅ | ✅ | ❌ |
 | **Self-hosted** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Language** | Go | C (extension) | Go | Go | C | JS/TS | Python |
-| **Stars** | ~3.5K | ~3.7K | ~? | ~? | ~550 | ~? | ~? |
+| **Stars** | ~3.5K | ~3.7K | ~17 | ~89 | ~550 | ~2 | ~? |
+| **Tested?** | ✅ benchmarked | ✅ 2-node test | ✅ 2-node test | ✅ 2-node test | ❌ needs cloud | ❌ needs transport | ❌ one-way only |
+| **Read QPS** | 16K | 378K | 197K | 1.5K (HTTP) | — | — | — |
+| **Write QPS** | 17K | 22K | 9.4K | 1.3K (HTTP) | — | — | — |
 
 ### Consensus-Based (Single-Leader, Strong)
 
@@ -367,6 +370,10 @@ Butuh paling easy, ok managed?
 |PostgreSQL 18 (TCP)|10K|4K|Server|TCP overhead ~35%|
 |D1 internal|91|94|Serverless|Worker binding, ~11ms per query|
 |D1 external|43|38|Serverless HTTP|HTTP API, ~25ms per query|
+|cr-sqlite (CRR)|378K|22K|Embedded + CRDT|CRDT extension, manual changeset exchange|
+|HarmonyLite (CDC)|197K|9.4K|Sidecar + NATS|CDC trigger, NATS JetStream, ~30s lag for 10K writes|
+|HA SQLite (HTTP)|1.5K|1.3K|Server + NATS|HTTP API, NATS JetStream, multi-protocol (HTTP/gRPC/MySQL/PG)|
+|HA SQLite (direct)|229K|527K|Embedded|Direct SQLite access, bypasses HTTP + replication|
 |Turso remote|7|7|Serverless HTTP|Mac → Tokyo, network latency dominant|
 
 ### Key takeaways dari benchmark
@@ -377,6 +384,10 @@ Butuh paling easy, ok managed?
 - **pgrust 3.3x faster write vs PostgreSQL** — pipelined fsync. Tapi beta (v0.2).
 - **Marmot write (17K) > PostgreSQL (4K)** — CDC + MySQL protocol lebih efisien dari PG TCP.
 - **D1/Turso remote tidak untuk high-QPS** — network latency dominant. Cocok untuk serverless/edge low-traffic.
+- **CDC multi-writer: cr-sqlite read = native SQLite (378K)** — CRDT metadata zero read overhead. Tapi write 20x slower (22K vs 444K).
+- **HarmonyLite auto-sync via NATS** — 9.4K write, ~30s lag for 10K writes. Hobby-grade (17 stars, dormant).
+- **HA SQLite HTTP API = bottleneck** — 1.3K write via HTTP, 527K direct. Multi-protocol (HTTP/gRPC/MySQL/PG) tapi HTTP overhead dominant.
+- **Marmot (17K write) masih juara multi-writer throughput** — CDC + 2PC + MySQL protocol lebih efisien dari CRDT trigger atau HTTP API.
 
 ### walsync A/B test results
 
@@ -387,6 +398,67 @@ Butuh paling easy, ok managed?
 | v0.3.0 | + gzip + keepalive | -20% CPU | 95% reduction | no regression |
 | v0.4.0 | + reconnect + salt detection | — | — | kill replica → restart → recovers |
 | v0.5.0 | + config file + metrics | <10ms overhead | — | zero measurable CPU overhead |
+
+### CDC Multi-Writer Test Results (OVH VPS, 6 vCPU x86_64, HDD, SQLite 3.46, Python 3)
+
+Riset CDC / logical replication multi-writer — test real di server OVH. 3 tool berhasil di-test: cr-sqlite, HarmonyLite, HA SQLite. 3 tool di-skip: sqlite-cdc (one-way only, no multi-writer), sqlite-sync (butuh SQLite Cloud managed), replic-sqlite (butuh custom transport ~50 LOC, 2 stars).
+
+| Tool | Read QPS | Write QPS | Replication lag | Convergence | Binary size | Setup time |
+|---|---:|---:|---|---|---:|---|
+| **cr-sqlite** (CRR) | 378K | 22K | instant (manual sync) | ✅ bidirectional | 2.1MB (.so) | 2 min |
+| **HarmonyLite** (CDC) | 197K | 9.4K | ~30s for 10K writes | ✅ automatic | 28MB | 5 min |
+| **HA SQLite** (HTTP) | 1.5K | 1.3K | ~3s | ✅ automatic | 78MB | 5 min |
+| Plain SQLite (baseline) | 372K | 444K | — | — | — | — |
+
+#### cr-sqlite — CRDT extension
+
+Test: load `.so` extension di sqlite3 CLI, create CRR tables, manual changeset exchange via Python (ATTACH DATABASE + INSERT INTO crsql_changes).
+
+- **Read: 378K QPS** — sama dengan plain SQLite (372K). CRDT metadata tidak ada read overhead.
+- **Write: 22K QPS** — 20x slower dari plain SQLite (444K). CRDT trigger + metadata per row.
+- **Conflict resolution: CRDT per column.** Test: update user 1 city di node1 (Tokyo) + node2 (Paris) → converged ke Tokyo (LWW, col_version tie-break).
+- **Transport: manual.** Tidak ada built-in transport. User define sendiri sync mechanism. Test pakai Python ATTACH DATABASE untuk exchange changesets.
+- **Binary: 2.1MB** — loadable `.so` extension, zero dependencies.
+- **Limitasi: sqlite3 CLI tidak bisa handle binary blobs di crsql_changes.** Harus pakai Python/Node untuk sync. `crsql_finalize()` wajib sebelum close (kalau tidak, `sqlite3_close()` error).
+- **Version: v0.16.3** (binary dari Jan 2024, codebase active sampai Aug 2026).
+- **PK constraint: `INTEGER PRIMARY KEY NOT NULL`** — `INTEGER PRIMARY KEY` saja dianggap nullable oleh cr-sqlite.
+
+#### HarmonyLite — CDC + NATS JetStream
+
+Test: 2 binary dengan embedded NATS, node2 connect ke node1 via `--replication-url`. Write via Python sqlite3, replication automatic via NATS.
+
+- **Read: 197K QPS** — lebih rendah dari cr-sqlite (378K) karena CDC trigger table ada di DB.
+- **Write: 9.4K QPS** — CDC trigger overhead (~10-20% dari plain SQLite write).
+- **Replication lag: ~30s for 10K writes.** Async via NATS JetStream. 10K writes: 767 rows setelah 5s, 4413 setelah 15s, 10061 setelah 25s, 10100 setelah 30s.
+- **Convergence: ✅ automatic.** Write ke node1 → replicate ke node2 via NATS. No manual sync needed.
+- **Binary: 28MB** — embedded NATS JetStream, single binary.
+- **Setup: 5 min.** Butuh: (1) DB file harus exist dengan schema sebelum start, (2) config TOML dengan absolute paths, (3) node2 connect ke node1 NATS via `urls = ["nats://127.0.0.1:PORT"]`.
+- **Limitasi: sqlite3 CLI error** ("unsafe use of virtual table") — harus pakai Python/Node untuk write. Cluster mode (NATS routing) tidak work — pakai client mode (node2 connect ke node1 NATS).
+- **Version: v0.10.0** (Jan 2026). 17 stars, 7 months dormant, issues disabled. Hobby-grade.
+- **Config gotcha: `cluster_peers` di TOML tidak work.** Pakai `urls` di `[nats]` section untuk node2 connect ke node1.
+
+#### HA SQLite — multi-protocol dengan NATS
+
+Test: 2 binary, node1 dengan embedded NATS + custom nats.conf, node2 connect via `--replication-url`. Akses via HTTP `/query` endpoint.
+
+- **Read: 1.5K QPS (HTTP)** — HTTP overhead dominant. Direct SQLite read: 229K QPS.
+- **Write: 1.3K QPS (HTTP)** — HTTP overhead + replication. Direct SQLite write: 527K QPS.
+- **Replication lag: ~3s.** Lebih cepat dari HarmonyLite karena NATS config optimized.
+- **Convergence: ✅ automatic.** Write ke node1 → replicate ke node2. Write ke node2 → replicate ke node1. Full bidirectional.
+- **Binary: 78MB** — embedded NATS + multi-protocol server (HTTP, gRPC, MySQL wire, PG wire).
+- **Setup: 5 min.** Butuh: (1) custom `nats.conf` dengan `jetstream.store_dir` (embedded NATS default tidak work), (2) `--nats-config` flag, (3) node2 `--replication-url nats://127.0.0.1:PORT`.
+- **API: POST /query** dengan `{"sql": "SELECT ..."}` — return JSON dengan columns + rows.
+- **Version: v0.12.10** (Aug 2026). 89 stars. Active development.
+- **NATS gotcha: embedded NATS server gagal start tanpa custom config.** Error: "embedded NATS is not ready for connections". Fix: create `nats.conf` dengan `jetstream { store_dir: "/path" }` dan pass via `--nats-config`.
+
+#### Key takeaways CDC multi-writer
+
+- **cr-sqlite = best raw performance** (378K read, 22K write) tapi manual sync (no built-in transport). Cocok untuk app yang sudah punya transport layer (HTTP, WebSocket, dll).
+- **HarmonyLite = easiest automatic replication** (9.4K write, auto-sync via NATS) tapi hobby-grade (17 stars, dormant).
+- **HA SQLite = most features** (multi-protocol, MySQL/PG proxy) tapi HTTP API = bottleneck (1.3K write). Direct SQLite access bypasses replication.
+- **Semua CDC tools punya write overhead** — cr-sqlite 20x, HarmonyLite 47x, HA SQLite 340x (HTTP). Trade-off: multi-writer convenience vs write throughput.
+- **Untuk high-throughput multi-writer: Marmot (17K write)** masih juara. CDC + 2PC + MySQL protocol lebih efisien dari CRDT trigger atau HTTP API.
+- **Conflict resolution: CRDT (cr-sqlite) > LWW (HarmonyLite, HA SQLite).** CRDT merge non-conflicting column updates tanpa data loss. LWW always overwrite entire row.
 
 ---
 

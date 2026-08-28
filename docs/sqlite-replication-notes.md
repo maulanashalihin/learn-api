@@ -370,7 +370,8 @@ Butuh paling easy, ok managed?
 |PostgreSQL 18 (TCP)|10K|4K|Server|TCP overhead ~35%|
 |D1 internal|91|94|Serverless|Worker binding, ~11ms per query|
 |D1 external|43|38|Serverless HTTP|HTTP API, ~25ms per query|
-|cr-sqlite (CRR)|378K|22K|Embedded + CRDT|CRDT extension, manual changeset exchange|
+|cr-sqlite (CRR, Bun 1.4)|337K|25K|Embedded + CRDT|CRDT extension, 2-node cross-server verified, HTTP changeset exchange|
+|cr-sqlite (CRR, Python)|378K|22K|Embedded + CRDT|Same extension, Python sqlite3, manual ATTACH sync|
 |HarmonyLite (CDC)|197K|9.4K|Sidecar + NATS|CDC trigger, NATS JetStream, ~30s lag for 10K writes|
 |HA SQLite (HTTP)|1.5K|1.3K|Server + NATS|HTTP API, NATS JetStream, multi-protocol (HTTP/gRPC/MySQL/PG)|
 |HA SQLite (direct)|229K|527K|Embedded|Direct SQLite access, bypasses HTTP + replication|
@@ -412,14 +413,17 @@ Riset CDC / logical replication multi-writer — test real di server OVH. 3 tool
 
 #### cr-sqlite — CRDT extension
 
-Test: load `.so` extension di sqlite3 CLI, create CRR tables, manual changeset exchange via Python (ATTACH DATABASE + INSERT INTO crsql_changes).
+Test: 2 server (OVH Singapore + Underconst Bandung), Bun 1.4.0, crsqlite.so v0.16.3. Multi-writer replication via HTTP changeset exchange (~50 LOC sync module). Also benchmarked with Python for comparison.
 
-- **Read: 378K QPS** — sama dengan plain SQLite (372K). CRDT metadata tidak ada read overhead.
-- **Write: 22K QPS** — 20x slower dari plain SQLite (444K). CRDT trigger + metadata per row.
-- **Conflict resolution: CRDT per column.** Test: update user 1 city di node1 (Tokyo) + node2 (Paris) → converged ke Tokyo (LWW, col_version tie-break).
-- **Transport: manual.** Tidak ada built-in transport. User define sendiri sync mechanism. Test pakai Python ATTACH DATABASE untuk exchange changesets.
+- **Read: 337K QPS (Bun) / 378K QPS (Python)** — sama dengan plain SQLite (328K / 372K). CRDT metadata tidak ada read overhead.
+- **Write: 25K QPS (Bun) / 22K QPS (Python)** — 4.2x slower dari plain SQLite (105K Bun / 444K Python). CRDT trigger + metadata per row.
+- **Multi-writer cross-server: ✅ VERIFIED.** Write Alice+Bob di OVH (Singapore), write Charlie+Dewi di Underconst (Bandung) → kedua node converge ke 4 users dalam ~4 detik (2s sync interval + network RTT).
+- **Conflict resolution: ✅ VERIFIED.** Update user 1 city = "Tokyo" di OVH, update city = "Paris" di Underconst → kedua node converge ke "Paris" (LWW, later db_version wins).
+- **Transport: HTTP changeset exchange (~50 LOC).** Background setInterval(2s) → export crsql_changes → POST /sync → peer INSERT INTO crsql_changes. Binary blobs (pk, site_id) harus di-serialize ke number[] untuk JSON transport.
 - **Binary: 2.1MB** — loadable `.so` extension, zero dependencies.
-- **Limitasi: sqlite3 CLI tidak bisa handle binary blobs di crsql_changes.** Harus pakai Python/Node untuk sync. `crsql_finalize()` wajib sebelum close (kalau tidak, `sqlite3_close()` error).
+- **bun:sqlite support: ✅ `db.loadExtension()` works.** Bun 1.4.0 native SQLite support loadable extensions.
+- **Limitasi: `pk` dan `site_id` adalah Uint8Array (binary blobs).** JSON.stringify serialize sebagai `{"0":1,"1":9}` → broken saat di-parse. Solusi: convert ke `Array.from(uint8array)` sebelum send, `new Uint8Array(array)` saat apply.
+- **`crsql_finalize()` wajib sebelum close.** Kalau tidak, `sqlite3_close()` error: "unable to close due to unfinalized statements".
 - **Version: v0.16.3** (binary dari Jan 2024, codebase active sampai Aug 2026).
 - **PK constraint: `INTEGER PRIMARY KEY NOT NULL`** — `INTEGER PRIMARY KEY` saja dianggap nullable oleh cr-sqlite.
 

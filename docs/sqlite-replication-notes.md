@@ -54,12 +54,33 @@ Litestream hanya backup. Untuk multi-node, ada beberapa tools dengan tradeoff be
 ### Landscape
 
 ```
-Litestream   → 1 writer, backup ke S3, restore manual        ← bukan multi-node
-LiteFS       → 1 writer, live read replicas, auto-failover   ← multi-node READ
-rqlite       → 1 leader, multi-node write via Raft           ← multi-node WRITE (strong)
-Marmot       → multi-writer, gossip, eventual consistency    ← multi-node WRITE (eventual)
-Turso        → 1 primary, embedded replicas, managed         ← multi-node READ (managed)
-dqlite       → 1 leader, multi-node write via Raft           ← multi-node WRITE (embedded)
+── WAL shipping / physical replication ──────────────────────────
+Litestream    → 1 writer, stream WAL ke S3, restore manual         ← backup/DR
+LiteFS        → 1 writer, FUSE intercept, live read replicas       ← multi-node READ
+walsync       → 1 writer, baca WAL file, gRPC ship ke replica      ← multi-node READ (no FUSE)
+Mycelite      → 1 writer, VFS extension, page-diff journal         ← multi-node READ
+Walrust       → 1 writer, Rust, stream WAL ke S3                   ← backup/DR
+replited      → 1 writer, Rust, stream WAL ke S3/GCS/Azure         ← backup/DR
+Verneuil      → 1 writer, VFS extension, async replicate ke S3     ← backup/DR
+LiteSync      → 1 writer, replace SQLite lib, offline sync         ← multi-node READ
+
+── CDC / logical replication (multi-writer) ─────────────────────
+Marmot        → multi-writer, CDC + 2PC, gossip, MySQL protocol    ← multi-node WRITE (eventual)
+cr-sqlite     → multi-writer, CRDT extension, changeset API        ← multi-node WRITE (CRDT)
+HarmonyLite   → multi-writer, CDC, NATS JetStream                  ← multi-node WRITE (eventual)
+HA SQLite     → multi-writer, CDC, NATS JetStream, multi-protocol  ← multi-node WRITE (eventual)
+sqlite-sync   → multi-writer, CRDT, offline-first, multi-device    ← multi-node WRITE (CRDT)
+replic-sqlite → multi-writer, CRDT, Node.js/Bun, ~800 LOC          ← multi-node WRITE (CRDT)
+sqlite-cdc    → multi-writer, trigger-based CDC, LWW               ← multi-node WRITE (eventual)
+
+── Consensus-based (single-leader, strong consistency) ──────────
+rqlite        → 1 leader, Raft, HTTP API, single binary            ← multi-node WRITE (strong)
+dqlite        → 1 leader, Raft, C library, embedded                ← multi-node WRITE (strong)
+zaxonlite     → 1 leader, Paxos, Zig                               ← multi-node WRITE (strong)
+
+── Managed / serverless ─────────────────────────────────────────
+Turso         → 1 primary, embedded replicas, managed             ← multi-node READ (managed)
+D1            → serverless SQLite di Cloudflare edge               ← serverless
 ```
 
 ### LiteFS — multi-region read replicas
@@ -131,45 +152,279 @@ C library dengan Go bindings. Raft consensus embedded di library, bukan standalo
 
 Code change: ganti SQLite C API dengan dqlite C API. Dipakai Canonical/LXD. Cocok untuk embedded strong consistency tanpa standalone process.
 
+### cr-sqlite — CRDT extension untuk multi-master
+
+Runtime loadable extension (C) untuk SQLite/libSQL. Upgrade tabel jadi "conflict-free replicated relations" (CRR) via `crsql_as_crr('table')`. Sync via `crsql_changes` virtual table — export/import changesets antar database.
+
+Conflict resolution: **CRDT per column** — LWW (default), fractional index (ordered list), observe-remove (set). Berbeda dengan LWW-only tools: cr-sqlite bisa merge non-conflicting column updates tanpa data loss. Counter CRDT dan multi-value register sedang dikembangkan.
+
+Code change: load extension + `crsql_as_crr()` per tabel. Tidak ganti SQLite API. Transport agnostic — user define sendiri sync mechanism (HTTP, WebSocket, dll). ~3.7K stars. Dipakai Turso/libSQL.
+
+### HarmonyLite — Marmot v1 continuation dengan NATS
+
+Leaderless, multi-writer, eventually consistent. CDC capture row-level changes, ship via **NATS JetStream**. LWW conflict resolution. DDL replication didukung.
+
+Fork/continuation dari Marmot v1 (sebelum v2 rewrite). Beda dengan Marmot v2: pakai NATS JetStream bukan SWIM gossip. Cocok untuk yang sudah pakai NATS infrastructure.
+
+### HA SQLite Cluster — multi-protocol dengan NATS
+
+Highly available SQLite cluster powered by embedded NATS JetStream. Multi-protocol access: HTTP, gRPC, Go database/sql, JDBC, MySQL wire, PostgreSQL wire. Multi-writer dengan CDC, LWW.
+
+Unik: bisa **proxy MySQL/PostgreSQL** ke SQLite cache lokal. Cocok untuk edge: baca lokal (fast), write proxy ke remote DB. Cross-database query tanpa ATTACH.
+
+### sqlite-sync — CRDT offline-first sync
+
+CRDT-based, offline-first sync untuk SQLite. Sync ke SQLite Cloud, PostgreSQL, atau Supabase tanpa backend. Block/line-level merge untuk text/markdown columns. Row-level security.
+
+Platform: Linux, macOS, Windows, iOS, Android, WASM. ~550 stars. Cocok untuk mobile/local-first apps yang butuh multi-device sync.
+
+### replic-sqlite — CRDT untuk Node.js/Bun
+
+Node.js/Bun module, CRDT-based, ~800 LOC. Embedded langsung di app — no central server. Multi-writer, eventual consistency, selective replication (tabel dengan `_patches` suffix).
+
+Cocok untuk Node.js apps yang butuh multi-writer SQLite tanpa external process. Sangat lightweight.
+
+### sqlite-cdc — trigger-based CDC
+
+Trigger-based CDC engine untuk SQLite. Install triggers di target tabel, capture changes, ship ke destination. Hampir identis dengan approach walsync CDC research (trigger + LWW).
+
+### walsync — WAL shipping via gRPC (project kita)
+
+```
+Primary node                          Replica node
+┌──────────┐                          ┌──────────┐
+│  App     │                          │  App     │
+│  SQLite  │                          │  SQLite  │
+│  embedded│                          │  embedded│
+│  (zero   │                          │  (read   │
+│  overhead│                          │  only)   │
+└────┬─────┘                          └────┬─────┘
+     │ WAL file grows                      │
+     ↓                                     │
+┌──────────┐     gRPC ShipWal       ┌──────────┐
+│ walsync  │ ──────────────────────→│ walsync  │
+│ primary  │  gzip + keepalive      │ replica  │
+│ baca WAL │  reconnect + salt      │ write WAL│
+└──────────┘                        └──────────┘
+```
+
+Background process yang baca WAL file langsung, ship via gRPC ke replica. Single Go binary, zero CGo, no FUSE, no VFS extension, no schema change. App pakai standard SQLite embedded — zero overhead.
+
+v0.5.0 fitur: gRPC persistent HTTP/2, gzip compression (95% bandwidth reduction), keepalive (15s failure detection), reconnect (retry on ship error), WAL salt detection (snapshot on salt change), config file (TOML), Prometheus metrics.
+
+Limitasi: single-writer only, replicas read-only, eventual consistency (~1-2s). Multi-write tidak didukung — WAL page-level tidak bisa merge dari node berbeda (riset di [RESEARCH.md](https://github.com/maulanashalihin/walsync/blob/main/RESEARCH.md)).
+
+### Mycelite — VFS extension page-diff
+
+SQLite VFS extension yang intercept page writes, generate binary diffs, store di journal. Diffs bisa di-stream over network ke replica. Physical single-writer replication.
+
+Bedanya dengan walsync: Mycelite = VFS extension (C level, intercept di page write), walsync = background process (baca WAL file dari luar). Mycelite lebih tight integration tapi butuh C compilation.
+
+### LiteSync — replace SQLite library
+
+Ganti SQLite library dengan modified version yang punya LiteSync code. Pakai native SQLite3 interface (tidak ada API baru). Centralized (star) topology — primary node distribusi fresh copy, lalu node exchange transactions online/offline.
+
+Unik: **offline sync** — node bisa offline, transaction log disimpan lokal, exchange saat online lagi. Tapi: AUTOINCREMENT tidak didukung, non-deterministic functions (random(), date('now')) dilarang. Hanya 1 app per DB instance.
+
+### Verneuil — VFS extension async S3
+
+Linux-only VFS extension (Rust) dari Backtrace. Async streaming replication ke S3-compatible blob stores. Intercept changes di VFS level, create spooling snapshots, upload async.
+
+Bedanya dengan Litestream: Verneuil = VFS extension (intercept di kernel level), Litestream = background process (baca WAL file). Verneuil lebih tight tapi Linux-only.
+
+### Walrust — Rust WAL shipping ke S3
+
+Lightweight Rust tool untuk SQLite WAL shipping ke S3-compatible storage (S3, MinIO, R2, Tigris). Bisa jalan sebagai sidecar atau embedded library.
+
+Mirip Litestream tapi Rust. Memory-efficient. Cocok untuk Rust ecosystem.
+
+### replited — Rust WAL replication multi-backend
+
+Rust daemon, SQLite WAL replication ke S3, GCS, Azure Blob, filesystem. Live streaming. Multi-backend support.
+
+### zaxonlite — Paxos-based distributed SQLite
+
+Distributed SQL database built on SQLite. Single elected leader, Paxos-based consensus (paxos-zig). Strong replication guarantees. Zig implementation.
+
+### Cloudflare D1 — serverless SQLite di edge
+
+SQLite di Cloudflare edge network. Akses via Worker binding (internal) atau HTTP API (external). Bukan replication — serverless database. Query ~11ms per request bahkan dengan Worker binding. Cocok untuk low-QPS serverless apps, bukan high-throughput.
+
 ---
 
 ## Comparison Matrix
 
-| | Litestream | LiteFS | rqlite | Marmot | Turso | dqlite |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Multi-node** | ❌ backup | ✅ read replicas | ✅ full cluster | ✅ full cluster | ✅ embedded | ✅ full cluster |
-| **Multi-writer** | ❌ | ❌ | ❌ | ✅ any node | ❌ | ❌ |
-| **Code change** | ❌ none | ❌ none (FUSE) | ✅ HTTP API | ❌ none (sidecar) | ✅ libSQL SDK | ✅ C API |
-| **Consistency** | — | eventual | strong | eventual | strong | linearizable |
-| **Failover** | manual | auto | auto | N/A (leaderless) | auto | auto |
-| **Self-hosted** | ✅ | ✅ | ✅ | ✅ | ❌ managed | ✅ |
-| **Setup** | ⭐ easiest | ⭐⭐⭐ | ⭐⭐ | ⭐⭐ | ⭐ easiest | ⭐⭐⭐ |
+### WAL Shipping / Physical Replication
 
+| | Litestream | LiteFS | walsync | Mycelite | LiteSync | Verneuil | Walrust | replited |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Multi-node** | ❌ S3 | ✅ live | ✅ live | ✅ live | ✅ live | ❌ S3 | ❌ S3 | ❌ S3/GCS |
+| **Multi-writer** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Code change** | ❌ | ❌ FUSE | ❌ none | ❌ VFS ext | ❌ replace lib | ❌ VFS ext | ❌ | ❌ |
+| **Transport** | S3 | HTTP | gRPC | network | TCP | S3 | S3 | S3/GCS/Azure |
+| **Compression** | ✅ | ✅ LTX | ✅ gzip | ✅ binary | ✅ | ✅ | ✅ | ✅ |
+| **Self-hosted** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Language** | Go | Go | Go | C | C | Rust | Rust | Rust |
+| **Stars** | ~11K | ~4K | — | ~? | — | ~? | ~? | ~? |
+
+### CDC / Logical Replication (Multi-Writer)
+
+| | Marmot | cr-sqlite | HarmonyLite | HA SQLite | sqlite-sync | replic-sqlite | sqlite-cdc |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Multi-writer** | ✅ any node | ✅ multi-master | ✅ any node | ✅ any node | ✅ multi-device | ✅ multi-master | ✅ any node |
+| **Conflict resolution** | 2PC + LWW (HLC) | CRDT (LWW, counter, MV-reg) | LWW | LWW | CRDT | CRDT | LWW |
+| **CDC method** | preupdate hook | C extension | trigger/hook | CDC | CRDT engine | CRDT (~800 LOC) | triggers |
+| **Transport** | gRPC + SWIM | app-defined | NATS JetStream | NATS JetStream | built-in | app-defined | app-defined |
+| **Code change** | ❌ sidecar | ✅ load ext | ❌ sidecar | ❌ sidecar/driver | ✅ SDK | ✅ Node module | ❌ triggers |
+| **DDL replication** | ✅ | ✅ | ✅ | ✅ (v0.0.7+) | ✅ | ✅ | ❌ |
+| **Self-hosted** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Language** | Go | C (extension) | Go | Go | C | JS/TS | Python |
+| **Stars** | ~3.5K | ~3.7K | ~? | ~? | ~550 | ~? | ~? |
+
+### Consensus-Based (Single-Leader, Strong)
+
+| | rqlite | dqlite | zaxonlite |
+|---|:---:|:---:|:---:|
+| **Multi-writer** | ❌ leader | ❌ leader | ❌ leader |
+| **Consensus** | Raft | Raft | Paxos |
+| **Consistency** | strong | linearizable | strong |
+| **Failover** | auto | auto | auto |
+| **Code change** | ✅ HTTP API | ✅ C API | ✅ |
+| **Self-hosted** | ✅ | ✅ | ✅ |
+| **Language** | Go | C | Zig |
+| **Stars** | ~15K | ~4K | ~? |
+
+### Managed / Serverless
+
+| | Turso | D1 |
+|---|:---:|:---:|
+| **Multi-writer** | ❌ primary | ❌ |
+| **Self-hosted** | ❌ managed | ❌ managed |
+| **Code change** | ✅ libSQL SDK | ✅ Worker binding |
+| **Consistency** | strong | strong |
+| **Setup** | ⭐ easiest | ⭐ easiest |
+| **Stars** | — | — |
 ---
 
 ## Decision Guide
 
 ```
+── Backup / Disaster Recovery ──────────────────────────────────
 Butuh backup saja (disaster recovery)?
-  → Litestream (easiest, sidecar, stream WAL ke S3)
+  → Litestream (easiest, sidecar, stream WAL ke S3, ~11K stars)
+  → Walrust (Rust alternative, S3/MinIO/R2/Tigris)
+  → replited (multi-backend: S3/GCS/Azure/filesystem)
+  → Verneuil (Linux-only, VFS extension, async S3)
 
-Butuh multi-region READ, zero code change?
-  → LiteFS (FUSE, live read replicas, auto-failover)
+── Multi-node READ (single-writer) ─────────────────────────────
+Butuh multi-region READ, ok dengan FUSE?
+  → LiteFS (FUSE, live read replicas, auto-failover, ~4K stars)
 
+Butuh multi-region READ, NO FUSE, zero code change?
+  → walsync (gRPC WAL shipping, single Go binary, no FUSE)
+
+Butuh multi-region READ, ok replace SQLite library?
+  → LiteSync (offline sync, star topology, modified SQLite lib)
+
+── Multi-node WRITE, strong consistency ────────────────────────
 Butuh multi-node WRITE, strong consistency?
-  → rqlite (Raft, HTTP API, 3 node minimum)
+  → rqlite (Raft, HTTP API, single binary, ~15K stars)
+  → dqlite (C library, Raft, embedded, dipakai Canonical/LXD)
+  → zaxonlite (Paxos, Zig)
 
+── Multi-node WRITE, eventual consistency ──────────────────────
 Butuh multi-node WRITE, any node write, ok eventual consistency?
-  → Marmot (leaderless, gossip, sidecar, MySQL protocol)
+  → Marmot (leaderless, CDC+2PC, gossip, MySQL protocol, ~3.5K stars)
+  → HarmonyLite (NATS JetStream, Marmot v1 continuation)
+  → HA SQLite (NATS, multi-protocol: HTTP/gRPC/MySQL/PG)
+  → sqlite-cdc (trigger-based CDC, LWW, simplest)
 
+Butuh multi-master dengan CRDT (no data loss on conflict)?
+  → cr-sqlite (C extension, column-level CRDT, ~3.7K stars, dipakai libSQL)
+  → sqlite-sync (offline-first, multi-device, ~550 stars)
+  → replic-sqlite (Node.js/Bun, ~800 LOC, embedded)
+
+── Managed / Serverless ────────────────────────────────────────
 Butuh paling easy, ok managed?
   → Turso (embedded replicas, libSQL, managed primary)
-
-Butuh embedded library, strong consistency, no standalone process?
-  → dqlite (C/Go, Raft, dipakai Canonical/LXD)
+  → D1 (serverless SQLite di Cloudflare edge, low-QPS only)
 ```
 
 ---
+
+## Benchmark Results (Ubuntu VPS, 6 vCPU x86_64)
+
+|Tool|Read QPS|Write QPS|Model|Notes|
+|---|---:|---:|---|---|
+|Native SQLite (WAL)|221K|94K|Embedded|Baseline, zero overhead|
+|LiteFS (FUSE host)|220K|6K|FUSE + LTX|Read = kernel page cache, write overhead dari LTX fsync|
+|LiteFS (Docker)|10K|427|FUSE + LTX|Docker overlay2 break page cache|
+|Turso embedded|74K|7|Embedded + remote write|Read lokal, write forward ke Tokyo remote|
+|pgrust (socket)|19K|14K|Server (Rust)|PostgreSQL rewritten in Rust, pipelined fsync|
+|pgrust (TCP)|15K|11K|Server (Rust)|TCP overhead minimal|
+|Marmot (TCP)|16K|17K|Server (CDC)|MySQL protocol, CDC overhead|
+|PostgreSQL 18 (socket)|15K|4K|Server|Unix socket, standard PG|
+|PostgreSQL 18 (TCP)|10K|4K|Server|TCP overhead ~35%|
+|D1 internal|91|94|Serverless|Worker binding, ~11ms per query|
+|D1 external|43|38|Serverless HTTP|HTTP API, ~25ms per query|
+|Turso remote|7|7|Serverless HTTP|Mac → Tokyo, network latency dominant|
+
+### Key takeaways dari benchmark
+
+- **Embedded SQLite (221K read, 94K write)** tidak terkalahkan. Semua tool lain punya overhead.
+- **LiteFS read = native SQLite** (220K) karena FUSE pakai kernel page cache. Tapi write hanya 6K (LTX fsync per write).
+- **Docker break LiteFS** — overlay2 mengganggu page cache. Read turun 22x (220K → 10K).
+- **pgrust 3.3x faster write vs PostgreSQL** — pipelined fsync. Tapi beta (v0.2).
+- **Marmot write (17K) > PostgreSQL (4K)** — CDC + MySQL protocol lebih efisien dari PG TCP.
+- **D1/Turso remote tidak untuk high-QPS** — network latency dominant. Cocok untuk serverless/edge low-traffic.
+
+### walsync A/B test results
+
+| Version | Change | CPU | Bandwidth | Result |
+|---------|--------|-----|-----------|--------|
+| v0.1.0 | HTTP WAL shipping | baseline | baseline | works |
+| v0.2.0 | gRPC persistent HTTP/2 | — | — | sub-second sync |
+| v0.3.0 | + gzip + keepalive | -20% CPU | 95% reduction | no regression |
+| v0.4.0 | + reconnect + salt detection | — | — | kill replica → restart → recovers |
+| v0.5.0 | + config file + metrics | <10ms overhead | — | zero measurable CPU overhead |
+
+---
+
+## walsync Multi-Write Research
+
+### Riset: apakah walsync bisa support multi-writer?
+
+**Hasil: WAL page-level shipping TIDAK BISA multi-write. CDC trigger BISA tapi bukan arsitektur walsync.**
+
+#### Approach 1: Bi-directional WAL shipping — GAGAL
+
+Test: kedua node jalan sebagai primary+replica, ship WAL ke each other. Hasil: saling overwrite DB file, data loss. WAL = page-level, tidak bisa merge dari node berbeda.
+
+#### Approach 2: Trigger-based CDC + LWW — BERHASIL (tapi arsitektur berbeda)
+
+Test: SQLite triggers capture row-level changes → ship via gRPC → apply dengan LWW (timestamp compare). Sync flag prevents trigger loop.
+
+| Skenario | Hasil |
+|----------|-------|
+| Bi-directional INSERT (UUID PKs) | ✅ Converged |
+| Same row, beda timestamp (LWW) | ✅ Newer wins |
+| UPDATE + INSERT concurrent | ✅ Both applied |
+| Continuous sync round 2 | ✅ No loop, converged |
+
+**Tapi ini arsitektur yang berbeda total dari WAL shipping.** Bukan evolusi, tapi model replication berbeda yang kebetulan share gRPC transport.
+
+#### Trigger overhead benchmark
+
+| Variant | Write ops/sec | Overhead | DB size |
+|---------|-------------|----------|---------|
+| No trigger (1KB row) | 10,235 | baseline | 14MB |
+| Trigger full row JSON (1KB) | 8,071 | -21% | 40MB (2.9x) |
+| Trigger full row JSON (10KB) | 5,525 | -49% | 20MB (2x) |
+| Trigger metadata only (10KB) | 9,259 | -14% | 11MB (1.1x) |
+
+#### Kesimpulan
+
+walsync tetap WAL shipping single-writer. Multi-write CDC sudah di-solve oleh Marmot, cr-sqlite, HarmonyLite, HA SQLite, sqlite-cdc, replic-sqlite, sqlite-sync. Market crowded. Detail riset di [walsync RESEARCH.md](https://github.com/maulanashalihin/walsync/blob/main/RESEARCH.md#v060-research-multi-writer-support).
 
 ## Sources
 
@@ -181,3 +436,22 @@ Butuh embedded library, strong consistency, no standalone process?
 - [LiteFS vs Litestream vs rqlite vs dqlite on VPS 2025](https://onidel.com/blog/sqlite-replication-vps-2025)
 - [Litestream vs LiteFS vs rqlite: VPS Guide 2026](https://cloudhostreview.com/article/litestream-vs-litefs-vs-rqlite-sqlite-replication-vps-2026)
 - [Turso / libSQL in production](https://www.nazarboyko.com/articles/sqlite-in-production-with-turso-and-libsql)
+- [cr-sqlite — vlcn.io](https://github.com/vlcn-io/cr-sqlite)
+- [cr-sqlite docs](https://vlcn.io/docs/cr-sqlite/intro)
+- [HarmonyLite — NATS JetStream replication](https://github.com/wongfei2009/harmonylite)
+- [HA SQLite Cluster](https://github.com/litesql/ha)
+- [sqlite-sync — CRDT offline-first](https://github.com/sqliteai/sqlite-sync)
+- [replic-sqlite — Node.js CRDT](https://github.com/carboneio/replic-sqlite)
+- [sqlite-cdc — trigger-based CDC](https://github.com/kevinconway/sqlite-cdc)
+- [Mycelite — VFS page-diff replication](https://github.com/mycelial/mycelite)
+- [LiteSync — offline sync](https://litesync.io/en/sqlite-synchronization.html)
+- [Verneuil — async S3 replication](https://github.com/backtrace-labs/verneuil)
+- [Walrust — Rust WAL shipping](https://github.com/russellromney/walrust)
+- [replited — Rust WAL multi-backend](https://github.com/mrchypark/replited)
+- [zaxonlite — Paxos distributed SQLite](https://github.com/insanai/zaxonlite)
+- [dqlite — Canonical distributed SQLite](https://github.com/CanonicalLtd/dqlite)
+- [rqlite — Raft distributed SQLite](https://github.com/rqlite/rqlite)
+- [walsync — gRPC WAL shipping](https://github.com/maulanashalihin/walsync)
+- [walsync RESEARCH.md — multi-write research](https://github.com/maulanashalihin/walsync/blob/main/RESEARCH.md)
+- [Cloudflare D1 docs](https://developers.cloudflare.com/d1/)
+- [pgrust — PostgreSQL in Rust](https://github.com/malisper/pgrust)

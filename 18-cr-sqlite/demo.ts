@@ -21,6 +21,10 @@
 import { spawn } from "node:child_process";
 import { unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
+const CERT_DIR = "/tmp/crsql-demo-certs";
+const CERT = join(CERT_DIR, "cert.pem");
+const KEY = join(CERT_DIR, "key.pem");
 
 const scriptDir = import.meta.dirname;
 const EXTENSION = process.platform === "darwin" ? "./crsqlite.dylib" : "./crsqlite.so";
@@ -42,12 +46,13 @@ function start(name: string, args: string[]) {
 }
 
 async function fetchJSON(url: string, opts?: RequestInit) {
-  const res = await fetch(url, opts);
+  // Self-signed cert: bypass TLS verification
+  const res = await fetch(url, { ...opts, tls: { rejectUnauthorized: false } } as any);
   return res.json();
 }
 
 async function getUsers(port: number) {
-  return fetchJSON(`http://localhost:${port}/users`) as Promise<{
+  return fetchJSON(`https://localhost:${port}/users`) as Promise<{
     node: number;
     users: { id: number; name: string; city: string }[];
   }>;
@@ -61,6 +66,10 @@ async function main() {
     console.error(`   Download: curl -fsSL https://github.com/vlcn-io/cr-sqlite/releases/download/v0.16.3/crsqlite-${plat}.zip -o crsqlite.zip && unzip crsqlite.zip`);
     process.exit(1);
   }
+
+  // Generate self-signed cert for HTTP/3 (QUIC requires TLS)
+  execSync(`mkdir -p ${CERT_DIR} && openssl req -x509 -newkey rsa:2048 -keyout ${KEY} -out ${CERT} -days 1 -nodes -subj "/CN=localhost" 2>/dev/null`);
+  console.log(`  ✓ Self-signed cert generated for HTTP/3`);
 
   // Cleanup old DBs
   for (const f of [DB1, DB2, `${DB1}-wal`, `${DB1}-shm`, `${DB2}-wal`, `${DB2}-shm`]) {
@@ -76,28 +85,28 @@ async function main() {
   // Step 1: Start Node 1
   console.log("── Step 1: Start Node 1 (:3001) ────────────────────────────");
   const node1 = start("node1", [
-    join(scriptDir, "node.ts"), "1", "3001", DB1, EXTENSION, "http://localhost:3002",
+    join(scriptDir, "node.ts"), "1", "3001", DB1, EXTENSION, CERT, KEY, "https://localhost:3002",
   ]);
   await sleep(1500);
-  console.log("  ✓ Node 1 on http://localhost:3001");
+  console.log("  ✓ Node 1 on https://localhost:3001 (HTTP/3)");
   console.log();
 
   // Step 2: Start Node 2
   console.log("── Step 2: Start Node 2 (:3002) ────────────────────────────");
   const node2 = start("node2", [
-    join(scriptDir, "node.ts"), "2", "3002", DB2, EXTENSION, "http://localhost:3001",
+    join(scriptDir, "node.ts"), "2", "3002", DB2, EXTENSION, CERT, KEY, "https://localhost:3001",
   ]);
   await sleep(1500);
-  console.log("  ✓ Node 2 on http://localhost:3002");
+  console.log("  ✓ Node 2 on https://localhost:3002 (HTTP/3)");
   console.log();
 
   // Step 3: Write to Node 1 via HTTP /write (demo endpoint — production pakai db.query() langsung)
   console.log("── Step 3: Write Alice + Bob ke Node 1 ─────────────────────");
-  await fetchJSON("http://localhost:13001/write", {
+  await fetchJSON("https://localhost:3001/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 1, name: "Alice", city: "Singapore" }),
   });
-  await fetchJSON("http://localhost:13001/write", {
+  await fetchJSON("https://localhost:3001/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 2, name: "Bob", city: "Jakarta" }),
   });
@@ -106,11 +115,11 @@ async function main() {
 
   // Step 4: Write to Node 2
   console.log("── Step 4: Write Charlie + Dewi ke Node 2 ──────────────────");
-  await fetchJSON("http://localhost:13002/write", {
+  await fetchJSON("https://localhost:3002/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 3, name: "Charlie", city: "Bandung" }),
   });
-  await fetchJSON("http://localhost:13002/write", {
+  await fetchJSON("https://localhost:3002/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 4, name: "Dewi", city: "Surabaya" }),
   });
@@ -140,11 +149,11 @@ async function main() {
 
   // Step 7: Conflict test
   console.log("── Step 7: Conflict test — update user 1 di kedua node ─────");
-  await fetchJSON("http://localhost:13001/write", {
+  await fetchJSON("https://localhost:3001/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 1, name: "Alice", city: "Tokyo" }),
   });
-  await fetchJSON("http://localhost:13002/write", {
+  await fetchJSON("https://localhost:3002/write", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: 1, name: "Alice", city: "Paris" }),
   });
@@ -172,7 +181,7 @@ async function main() {
   console.log(`║  Multi-writer convergence: ${converged ? "✅" : "❌"}                              ║`);
   console.log(`║  Conflict resolution:      ${conflictResolved ? "✅" : "❌"}                              ║`);
   console.log("║  CRDT guarantee:           ✅ mathematical convergence    ║");
-  console.log("║  Transport:                HTTP changeset exchange (~30 LOC)║");
+  console.log("║  Transport:                HTTP/3 changeset exchange (QUIC)║");
   console.log("║  Infrastructure:           zero (no NATS, no sidecar)     ║");
   console.log("╚════════════════════════════════════════════════════════════╝");
 

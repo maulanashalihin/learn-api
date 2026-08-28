@@ -40,7 +40,8 @@ Node A (Singapore)           Node B (Jakarta)
   (changeset log)              (changeset log)
       ↓                            ↓
   HTTP /sync ←── exchange ──→ HTTP /sync
-  (background loop, 2s)        (background loop, 2s)
+  (background push loop,    (background push loop,
+   SYNC_INTERVAL ms)         SYNC_INTERVAL ms)
 ```
 
 1. **Write** — app write ke SQLite seperti biasa. cr-sqlite trigger capture per-column metadata (col_version, db_version, site_id).
@@ -104,20 +105,31 @@ curl http://localhost:3002/users
 
 ```typescript
 import { openDB } from "./db.ts";
-import { startSync } from "./sync.ts";
+import { syncRoutes, startPushLoop } from "./sync.ts";
 
-const { db } = openDB({
+const { db, close } = openDB({
   dbPath: "app.db",
   extensionPath: "./crsqlite.so",
   schema: `CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY NOT NULL, name TEXT, city TEXT)`,
   tables: ["users"],
 });
 
-startSync(db, { nodeId: 1, port: 3001, peers: ["http://peer:3002"] });
+// Background push loop (SYNC_INTERVAL env var, default 2000ms)
+const stopPush = startPushLoop(db, { nodeId: 1, peers: ["http://peer:3002"] });
+
+// SATU server: route app + route sync
+Bun.serve({
+  port: 3001,
+  async fetch(req) {
+    const syncRes = await syncRoutes(db, 1, req);  // /sync, /health, /users
+    if (syncRes) return syncRes;
+    // ... route app kamu lainnya
+    return new Response("Not found", { status: 404 });
+  },
+});
 
 // Write NORMAL — tidak lewat HTTP, CRDT metadata auto-tracked
 db.query("INSERT INTO users VALUES (?, ?, ?)").run(1, "Alice", "Singapore");
-```
 
 ## API Endpoints
 
@@ -128,16 +140,26 @@ db.query("INSERT INTO users VALUES (?, ?, ?)").run(1, "Alice", "Singapore");
 | `/users` | GET | List all users: `{ node, users: [...] }` |
 | `/sync` | POST | Receive changesets from peer (internal) |
 
-## CLI Flags
+## CLI Usage
 
-| Flag | Default | Description |
+```bash
+bun run node.ts <node-id> <port> <db-path> <extension> [cert-path] [key-path] [peer-url...]
+```
+
+| Arg | Required | Description |
 |---|---|---|
-| `--node-id` | `1` | Node identifier |
-| `--port` | `3001` | HTTP server port |
-| `--db` | `/tmp/crsql-node{N}.db` | SQLite database path |
-| `--extension` | `./crsqlite.so` | Path to crsqlite extension |
-| `--peer` | (none) | Peer URL, can be repeated |
-| `--table` | (none) | Table to mark as CRR, can be repeated |
+| `node-id` | ✅ | Node identifier (integer) |
+| `port` | ✅ | HTTP server port |
+| `db-path` | ✅ | SQLite database path |
+| `extension` | ✅ | Path to crsqlite extension (`.so` Linux, `.dylib` macOS) |
+| `cert-path` | HTTP/3 | TLS cert path (pass `-` for HTTP/1.1) |
+| `key-path` | HTTP/3 | TLS key path (pass `-` for HTTP/1.1) |
+| `peer-url` | (none) | Peer URL(s), `http://` or `https://` (auto-detects HTTP/3) |
+
+| Env Var | Default | Description |
+|---|---|---|
+| `SYNC_INTERVAL` | `2000` | Push loop interval in ms (best: `50`) |
+| `BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CLIENT` | (off) | Set `1` for HTTP/3 fetch support |
 
 ## Tested: 2-Server Cross-Server Replication
 
@@ -152,10 +174,12 @@ Tested dengan Bun 1.4.0 di 2 server fisik berbeda:
 
 | Test | Result |
 |---|---|
-| Write di kedua node → converge | ✅ ~4 detik (2s sync interval + RTT) |
-| Conflict (Tokyo vs Paris) → converge | ✅ Paris (LWW, later db_version wins) |
-| `bun:sqlite` `loadExtension()` | ✅ Works |
-| Cross-server HTTP sync | ✅ OVH ↔ Underconst via public internet |
+| Write di kedua node → converge | ✅ ~319ms (50ms interval, HTTP/1.1) |
+| Conflict (Tokyo vs Paris) → converge | ✅ Tokyo (LWW, later db_version wins) |
+| `bun:sqlite` `loadExtension()` | ✅ Works on Bun 1.4.0 Linux |
+| Cross-server HTTP/1.1 sync | ✅ OVH ↔ Underconst via public internet |
+| Cross-server HTTP/3 sync | ✅ HTTP/3 (QUIC) works, but 4-5x slower write phase |
+| Config finder (10 configs) | ✅ Best: HTTP/1.1 + 50ms interval = 319ms batch latency |
 
 ### Benchmark (Bun 1.4.0, OVH 6 vCPU, HDD, SQLite 3.46)
 
@@ -165,6 +189,30 @@ Tested dengan Bun 1.4.0 di 2 server fisik berbeda:
 | Write QPS | 25K | 105K | -76% (4.2x slower) |
 
 Read = native SQLite speed (CRDT metadata zero read overhead). Write 4.2x slower karena CRDT trigger + metadata per row per column.
+
+### Config Finder: HTTP/1.1 vs HTTP/3 × Sync Interval
+
+Tested cross-server (OVH Singapore ↔ Underconst Bandung, Bun 1.4.0): 50 writes rapid-fire, measure batch propagation latency (write → all 50 appear di peer).
+
+| Protocol | Interval | Batch Latency | Write Phase |
+|---|---|---:|---:|
+| HTTP/1.1 | 2000ms | 1040ms | 13ms |
+| HTTP/1.1 | 500ms | 394ms | 13ms |
+| HTTP/1.1 | 100ms | 377ms | 15ms |
+| **HTTP/1.1** | **50ms** | **319ms** | **12ms** |
+| HTTP/1.1 | 10ms | 382ms | 13ms |
+| HTTP/3 | 2000ms | 411ms | 63ms |
+| HTTP/3 | 500ms | 332ms | 63ms |
+| HTTP/3 | 100ms | 685ms | 72ms |
+| HTTP/3 | 50ms | 581ms | 77ms |
+| HTTP/3 | 10ms | 348ms | 83ms |
+
+**Best config: HTTP/1.1 + 50ms sync interval — 319ms batch latency.**
+
+Findings:
+- HTTP/3 write phase 4-5x lebih lambat (63-83ms vs 12-15ms) — TLS/QUIC handshake overhead per fetch. HTTP/3 experimental di Bun 1.4 belum optimal untuk rapid-fire small POST.
+- Interval 50ms optimal — 10ms tidak lebih cepat karena polling overhead. 2000ms paling lambat (push loop cuma fire tiap 2s).
+- HTTP/3 baru menang kalau: connection reuse jangka panjang, packet loss tinggi, atau multiple peers concurrent. Untuk single-peer batch sync, HTTP/1.1 cukup.
 
 ## Gotchas
 
@@ -217,7 +265,7 @@ cr-sqlite tidak punya built-in transport. Module ini implement HTTP changeset ex
 | **Code change** | zero (app tetap pakai SQLite) | load extension + `crsql_as_crr()` |
 | **Read QPS** | 348K (native SQLite) | 337K (native SQLite) |
 | **Write QPS** | 84K (native SQLite) | 25K (4.2x CRDT overhead) |
-| **Consistency** | eventual (~1-2s) | eventual (~4s, 2s interval) |
+| **Consistency** | eventual (~1-2s) | eventual (~319ms, 50ms interval) |
 | **Convergence** | N/A (single writer) | mathematical (CRDT guarantee) |
 | **Best for** | read-heavy, single-region write | multi-region write, edge, offline-first |
 
@@ -226,9 +274,11 @@ cr-sqlite tidak punya built-in transport. Module ini implement HTTP changeset ex
 | File | Description |
 |---|---|
 | `db.ts` | Library: `openDB()` — load extension, create schema, mark CRR tables |
-| `sync.ts` | Library: `startSync()` — background push loop + `/sync` receive endpoint |
-| `node.ts` | Node app: imports db.ts + sync.ts, write via `db.query()`, demo `/write` endpoint |
-| `demo.ts` | 2-node local demo orchestration |
+| `sync.ts` | Library: `syncRoutes()` route handler + `startPushLoop()` background push. Tidak bikin server sendiri. |
+| `node.ts` | Node app: SATU `Bun.serve` — route app + sync. HTTP/1.1 atau HTTP/3 (TLS). `SYNC_INTERVAL` env var. |
+| `demo.ts` | 2-node local demo orchestration (self-signed cert, HTTP/3) |
+| `bench-config.ts` | Config finder: HTTP/1.1 vs HTTP/3 × 5 intervals, batch propagation latency |
+| `cross-server-http3.sh` | Manual cross-server HTTP/3 test script |
 
 ## Further Reading
 

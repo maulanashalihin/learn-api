@@ -2,24 +2,33 @@
  * sync.ts — cr-sqlite changeset exchange.
  *
  * Library: background loop push local changesets ke peers,
- * HTTP endpoint receive changesets dari peers.
+ * route handler receive changesets dari peers.
  *
- * App tinggal import startSync() — tidak perlu pikir transport.
+ * TIDAK bikin Bun.serve sendiri. App mount route di server
+ * yang sudah ada. Ini in-app — semuanya satu proses, satu server.
  *
  * Usage:
- *   import { startSync } from "./sync.ts";
- *   const stop = startSync(db, { nodeId: 1, port: 3001, peers: ["http://peer:3002"] });
- *   // ... app write/read normal pakai db.query() ...
- *   stop();  // graceful shutdown
+ *   import { syncRoutes, startPushLoop } from "./sync.ts";
+ *
+ *   const stopPush = startPushLoop(db, { peers: ["http://peer:3002"] });
+ *
+ *   Bun.serve({
+ *     port: 3001,
+ *     fetch(req) {
+ *       const match = syncRoutes(db, 1, req);  // /sync, /health, /users
+ *       if (match) return match;
+ *       // ... route app kamu lainnya
+ *     },
+ *   });
  */
 
 import type { Database } from "bun:sqlite";
+import type { Request } from "bun";
 
-export interface SyncConfig {
-  nodeId: number;
-  port: number;
+export interface PushConfig {
   peers: string[];
   intervalMs?: number;
+  nodeId: number;
 }
 
 // --- Binary blob handling ---
@@ -53,104 +62,106 @@ function decodeChange(ch: Record<string, unknown>): unknown[] {
   ];
 }
 
-export function startSync(db: Database, config: SyncConfig): () => void {
-  const { nodeId, port, peers, intervalMs = 2000 } = config;
-  let lastSentVersion = 0;
-  let syncTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * Route handler untuk /sync, /health, /users.
+ * Return Response kalau route match, undefined kalau tidak.
+ * App panggil ini di fetch() server yang sudah ada.
+ */
+export async function syncRoutes(
+  db: Database,
+  nodeId: number,
+  req: Request,
+): Promise<Response | undefined> {
+  const url = new URL(req.url);
 
-  // HTTP server — hanya untuk /sync (receive changesets) + /health + /users
-  const server = Bun.serve({
-    port,
-    async fetch(req) {
-      const url = new URL(req.url);
-
-      // Health check
-      if (url.pathname === "/health") {
-        const count = db.query("SELECT count(*) as c FROM users").get() as { c: number };
-        return Response.json({ node: nodeId, users: count.c, peers });
-      }
-
-      // Sync endpoint — receive changesets from peer
-      if (url.pathname === "/sync" && req.method === "POST") {
-        const changes = (await req.json()) as Record<string, unknown>[];
-        if (changes.length === 0) return Response.json({ ok: true, applied: 0 });
-
-        const stmt = db.prepare(
-          "INSERT INTO crsql_changes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        let applied = 0;
-        for (const ch of changes) {
-          try {
-            stmt.run(...decodeChange(ch));
-            applied++;
-          } catch {
-            // Duplicate or conflict — cr-sqlite handles via LWW
-          }
-        }
-        if (applied > 0) {
-          const count = db.query("SELECT count(*) as c FROM users").get() as { c: number };
-          console.log(`[Node ${nodeId}] Received ${applied} changesets, now ${count.c} users`);
-        }
-        return Response.json({ ok: true, applied });
-      }
-
-      // Read all users — untuk demo verification
-      if (url.pathname === "/users") {
-        const rows = db.query("SELECT * FROM users ORDER BY id").all();
-        return Response.json({ node: nodeId, users: rows });
-      }
-
-      return new Response("Not found", { status: 404 });
-    },
-  });
-
-  console.log(`[Node ${nodeId}] Sync server on http://0.0.0.0:${port}`);
-
-  // Background loop: push local changesets to peers
-  if (peers.length > 0) {
-    syncTimer = setInterval(async () => {
-      try {
-        const changes = db
-          .query("SELECT * FROM crsql_changes WHERE db_version > ?")
-          .all(lastSentVersion) as Record<string, unknown>[];
-
-        if (changes.length === 0) return;
-
-        lastSentVersion = Math.max(
-          ...changes.map((c) => c.db_version as number),
-        );
-
-        const payload = JSON.stringify(encodeChanges(changes));
-
-        for (const peer of peers) {
-          try {
-            const res = await fetch(`${peer}/sync`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: payload,
-            });
-            const result = (await res.json()) as { applied: number };
-            if (result.applied > 0) {
-              console.log(
-                `[Node ${nodeId}] Pushed ${changes.length} changesets to ${peer}, applied ${result.applied}`,
-              );
-            }
-          } catch {
-            // Peer unreachable — retry next interval
-          }
-        }
-      } catch {
-        // Query error — skip this tick
-      }
-    }, intervalMs);
+  // Health check
+  if (url.pathname === "/health") {
+    const count = db.query("SELECT count(*) as c FROM users").get() as { c: number };
+    return Response.json({ node: nodeId, users: count.c });
   }
 
-  // Return stop function for graceful shutdown
-  return () => {
-    if (syncTimer) clearInterval(syncTimer);
-    console.log(`[Node ${nodeId}] Stopping sync...`);
-    db.exec("SELECT crsql_finalize()");
-    db.close();
-    server.stop();
-  };
+  // Sync endpoint — receive changesets from peer
+  if (url.pathname === "/sync" && req.method === "POST") {
+    const changes = (await req.json()) as Record<string, unknown>[];
+    if (changes.length === 0) return Response.json({ ok: true, applied: 0 });
+
+    const stmt = db.prepare(
+      "INSERT INTO crsql_changes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    let applied = 0;
+    for (const ch of changes) {
+      try {
+        stmt.run(...decodeChange(ch));
+        applied++;
+      } catch {
+        // Duplicate or conflict — cr-sqlite handles via LWW
+      }
+    }
+    if (applied > 0) {
+      const count = db.query("SELECT count(*) as c FROM users").get() as { c: number };
+      console.log(`[Node ${nodeId}] Received ${applied} changesets, now ${count.c} users`);
+    }
+    return Response.json({ ok: true, applied });
+  }
+
+  // Read all users — untuk demo verification
+  if (url.pathname === "/users") {
+    const rows = db.query("SELECT * FROM users ORDER BY id").all();
+    return Response.json({ node: nodeId, users: rows });
+  }
+
+  return undefined;
+}
+
+/**
+ * Background loop: push local changesets ke peers.
+ * Return stop function.
+ */
+export function startPushLoop(db: Database, config: PushConfig): () => void {
+  const { peers, intervalMs = 2000, nodeId } = config;
+  let lastSentVersion = 0;
+
+  const timer = setInterval(async () => {
+    try {
+      const changes = db
+        .query("SELECT * FROM crsql_changes WHERE db_version > ?")
+        .all(lastSentVersion) as Record<string, unknown>[];
+
+      if (changes.length === 0) return;
+
+      lastSentVersion = Math.max(
+        ...changes.map((c) => c.db_version as number),
+      );
+
+      const payload = JSON.stringify(encodeChanges(changes));
+
+      for (const peer of peers) {
+        try {
+          const isHttp3 = peer.startsWith("https://");
+          const fetchOpts: any = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+          };
+          if (isHttp3) {
+            fetchOpts.protocol = "http3";
+            fetchOpts.tls = { rejectUnauthorized: false };
+          }
+          const res = await fetch(`${peer}/sync`, fetchOpts);
+          const result = (await res.json()) as { applied: number };
+          if (result.applied > 0) {
+            console.log(
+              `[Node ${nodeId}] Pushed ${changes.length} changesets to ${peer}, applied ${result.applied}`,
+            );
+          }
+        } catch {
+          // Peer unreachable — retry next interval
+        }
+      }
+    } catch {
+      // Query error — skip this tick
+    }
+  }, intervalMs);
+
+  return () => clearInterval(timer);
 }

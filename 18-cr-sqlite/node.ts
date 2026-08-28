@@ -1,27 +1,28 @@
 /**
- * node.ts — cr-sqlite node (in-app, bukan sidecar).
+ * node.ts — cr-sqlite node (in-app, SATU server, SATU proses).
  *
- * Ini adalah cara pakai cr-sqlite di production:
- * 1. openDB() — load extension, mark CRR tables
- * 2. startSync() — background changeset exchange + /sync endpoint
- * 3. db.query() — write/read NORMAL, tidak lewat HTTP
+ * Ini cara pakai cr-sqlite di production:
+ * 1. openDB() — load extension, create schema, mark CRR
+ * 2. startPushLoop() — background changeset push ke peers
+ * 3. Bun.serve() — SATU server: route app + route sync
+ * 4. db.query() — write/read normal
  *
- * /write endpoint di sini HANYA untuk demo (supaya demo.ts bisa
- * trigger write via curl). Production app tidak butuh /write —
- * write langsung pakai db.query().
+ * /write endpoint HANYA untuk demo. Production app: write pakai
+ * db.query() langsung di route manapun.
  *
  * Usage:
- *   bun run 18-cr-sqlite/node.ts <node-id> <port> <db-path> <extension> <peer-url>
+ *   bun run 18-cr-sqlite/node.ts <node-id> <port> <db-path> <extension> <cert-path> <key-path> [peer-url...]
  */
 
 import { openDB } from "./db.ts";
-import { startSync } from "./sync.ts";
+import { syncRoutes, startPushLoop } from "./sync.ts";
 
-const [nodeIdStr, portStr, dbPath, extensionPath, ...peers] = process.argv.slice(2);
+const [nodeIdStr, portStr, dbPath, extensionPath, certPath, keyPath, ...peers] = process.argv.slice(2);
 const nodeId = parseInt(nodeIdStr ?? "1");
 const port = parseInt(portStr ?? "3001");
+const intervalMs = parseInt(process.env.SYNC_INTERVAL ?? "2000");
 
-console.log(`[Node ${nodeId}] Starting on :${port}, db: ${dbPath}`);
+console.log(`[Node ${nodeId}] Starting on :${port}, db: ${dbPath}, interval: ${intervalMs}ms`);
 console.log(`[Node ${nodeId}] Peers: ${peers.length ? peers.join(", ") : "none (standalone)"}`);
 
 // 1. Open DB with crsqlite extension — IN-APP
@@ -38,19 +39,30 @@ const { db, close } = openDB({
   `,
 });
 
-// 2. Start sync — background loop + /sync endpoint
-const stopSync = startSync(db, { nodeId, port, peers });
+// 2. Start background push loop — proses yang sama, bukan sidecar
+const stopPush = startPushLoop(db, { nodeId, peers, intervalMs });
 
-// 3. Demo endpoint — HANYA untuk demo.ts
-// Production app: write pakai db.query() langsung, tidak butuh /write
+// 3. SATU HTTP server — route app + route sync di tempat yang sama
 const server = Bun.serve({
-  port: port + 10000,  // demo endpoint di port terpisah (misal 13001)
+  port,
+  // HTTP/3 over QUIC — multiple streams, no head-of-line blocking
+  // Requires TLS (QUIC mandates encryption)
+  tls: certPath && certPath !== "-" && keyPath && keyPath !== "-" ? {
+    cert: Bun.file(certPath),
+    key: Bun.file(keyPath),
+  } : undefined,
+  http3: certPath && certPath !== "-",  // enable HTTP/3 only if TLS is configured
   async fetch(req) {
+    // Sync routes: /sync, /health, /users
+    const syncRes = await syncRoutes(db, nodeId, req);
+    if (syncRes) return syncRes;
+
     const url = new URL(req.url);
 
+    // Demo endpoint — HANYA untuk demo.ts
+    // Production: write pakai db.query() di route manapun
     if (url.pathname === "/write" && req.method === "POST") {
       const body = await req.json();
-      // INI cara write cr-sqlite: db.query() biasa, CRDT metadata auto-tracked
       db.query("INSERT OR REPLACE INTO users(id, name, city) VALUES (?, ?, ?)").run(
         body.id,
         body.name,
@@ -64,11 +76,14 @@ const server = Bun.serve({
   },
 });
 
-console.log(`[Node ${nodeId}] Demo /write on http://0.0.0.0:${port + 10000}`);
+const hasTls = certPath && certPath !== "-";
+console.log(`[Node ${nodeId}] HTTP${hasTls ? "/3" : "/1.1"} server on ${hasTls ? "https" : "http"}://0.0.0.0:${port}`);
 
 // Graceful shutdown
 function shutdown() {
-  stopSync();
+  stopPush();
+  console.log(`[Node ${nodeId}] Shutting down...`);
+  close();
   server.stop();
   process.exit(0);
 }

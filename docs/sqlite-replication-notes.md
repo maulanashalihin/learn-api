@@ -1,19 +1,18 @@
 # SQLite Replication & Sync
 
-Catatan tentang sinkronisasi SQLite antar server: dari backup (Litestream) sampai tools purpose-built untuk multi-node replication.
+Catatan tentang 3 masalah klasik SQLite: durabilitas, high availability, dan horizontal scaling.
 
 ---
 
 ## Masalah
 
-```
-Server A (SQLite)   Server B (SQLite)   Server C (SQLite)
-  data: Andi          data: Budi          data: (kosong)
-```
+SQLite adalah database paling kencang untuk single server. Embedded, zero config, baca langsung dari disk — tidak ada network hop, tidak ada protocol overhead. Tapi kekuatan ini sekaligus membuat 3 masalah bawaan:
 
-Bagaimana supaya ketiga server punya data yang sama?
+1. **Durabilitas** — kalau server mati, data hilang. Bagaimana agar data tidak hilang tanpa pindah ke database lain?
+2. **High availability** — kalau server mati, app down. Bagaimana agar app tetap jalan walau 1 node crash?
+3. **Horizontal scaling** — single server ada batasnya. Bagaimana agar app tetap kencang walau traffic meningkat, tanpa ganti database?
 
-SQLite adalah embedded database — tidak punya built-in replication seperti PostgreSQL/MySQL. Tidak ada `REPLICATE` command. Jadi butuh tool eksternal.
+PostgreSQL/MySQL punya built-in replication untuk masalah ini. SQLite tidak punya. Tidak ada `REPLICATE` command. Jadi butuh tool eksternal.
 
 ---
 

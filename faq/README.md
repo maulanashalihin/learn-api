@@ -214,6 +214,36 @@ Masalah: update database + publish event (Kafka/RabbitMQ) — gak bisa atomik ac
 
 ---
 
+## Production
+
+### walsync vs LiteFS vs rqlite: bedanya apa?
+
+| Tool | Read | Write | Model | Multi-writer | Failover |
+|------|-----:|------:|-------|:---:|:---:|
+| **walsync** | 348K | 84K | Embedded + WAL ship | ❌ | Manual |
+| LiteFS | 220K | 6K | FUSE + LTX | ❌ | Manual |
+| rqlite | ~10K | ~5K | TCP + Raft | ❌ | Auto (Raft) |
+
+walsync menang di read/write speed karena app pakai embedded SQLite langsung (no FUSE, no TCP). LiteFS intercept setiap write via FUSE (fsync per write). rqlite pakai TCP + Raft consensus per write.
+
+walsync kalah di failover: manual (tidak ada consensus). rqlite punya automatic failover via Raft leader election.
+
+### Kenapa walsync single-writer, tidak support multi-writer?
+
+WAL shipping = primary write WAL → replica apply WAL. Kalau dua node write bersamaan, WAL conflict — tidak ada merge mechanism. Multi-writer butuh conflict resolution (CRDT, operational transform, atau consensus).
+
+Tool yang support multi-writer: Marmot (CDC + Nats), cr-sqlite (CRDT), dqlite (Raft). Tapi semua punya overhead: CDC intercept setiap write, CRDT butuh metadata per row, Raft butuh quorum per write.
+
+walsync pilih: single-writer, zero overhead, embedded speed. Niche = read-heavy workload dengan satu writer.
+
+### walsync sync delay berapa ms?
+
+~100ms median (33-210ms range). Diukur dengan 2 Singapore VPS (~20ms latency). Burst 50 writes dalam 94ms (debounced batch).
+
+Sync delay = network latency + WAL ship time. walsync debounce WAL changes (50ms default) untuk batch multiple writes into one ship. Jadi single write = ~50ms debounce + ~20ms network = ~70ms. Burst = satu ship untuk semua.
+
+---
+
 ## General
 
 ### 16 teknologi ini, mana yang paling sering dipakai di production?

@@ -1,12 +1,12 @@
 # Learn API — Hands-on API Technologies
 
-Project belajar **API technologies** dari Beginner sampai Expert. Setiap teknologi punya working code (server + client) + README penjelasan konsep. Bukan teori doang — semua code sudah di-test dan verified jalan.
+Project belajar **API technologies** dari Beginner sampai Production. Setiap teknologi punya working code (server + client) + README penjelasan konsep. Bukan teori doang — semua code sudah di-test dan verified jalan.
 
 ## Highlights
 
 | Resource | Isi |
 |----------|-----|
-| [Learning Map](#learning-map) | 16 modul dari Beginner sampai Expert |
+| [Learning Map](#learning-map) | 17 modul dari Beginner sampai Production |
 | [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
 | [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
 | [Scalability Rating](docs/scalability-rating.md) | 16 teknologi dirating across 5 dimensi scalability |
@@ -46,6 +46,9 @@ Project belajar **API technologies** dari Beginner sampai Expert. Setiap teknolo
   14-eventual-consistency/    Eventual Consistency     Read repair, Merkle trees, CRDTs, vector clocks
   15-consensus/               Consensus Algorithms     Raft: leader election, log replication, partitions
   16-distributed-transactions/ Distributed Transactions  2PC, Saga, transactional outbox
+
+🟣 PRODUCTION ──────────────────────────────────────────── ✅ DONE
+  17-scaling-sqlite/          Scaling SQLite           walsync: WAL shipping replication, single-writer + multi-reader
 ```
 
 ## Quick Start
@@ -74,6 +77,7 @@ npm run dist-sys         # 13-dist-sys:   CAP theorem, consistency models, failu
 npm run eventual         # 14-eventual:   read repair, Merkle trees, CRDTs, vector clocks
 npm run consensus        # 15-consensus:  Raft leader election, log replication, partitions
 npm run dist-tx          # 16-dist-tx:    2PC, Saga, transactional outbox
+npm run scale-sqlite    # 17-scaling-sqlite: walsync WAL shipping replication demo
 
 # Typecheck everything
 npm run typecheck
@@ -181,6 +185,12 @@ learn-api/
 │   ├── demo.ts              # Orchestrates: 2PC + Saga + Outbox scenarios
 │   └── README.md
 │
+├── 17-scaling-sqlite/
+│   ├── writer.ts            # Express app (primary): CRUD tasks, write ke embedded SQLite
+│   ├── reader.ts            # Express app (replica): read dari SQLite readonly, auto-reconnect
+│   ├── demo.ts              # Orchestration: start walsync + apps, write, verify replication
+│   └── README.md
+│
 ├── faq/
 │   └── README.md             # FAQ: common questions per level + general
 │
@@ -243,6 +253,12 @@ learn-api/
 | **Consensus (Raft)** | Leader election + log replication with majority quorum | etcd, Consul, ZooKeeper — any system needing strong consistency |
 | **Distributed Transactions** | 2PC (blocking), Saga (compensating), Outbox (atomic publish) | Multi-service transactions, reliable event publishing |
 
+### Production
+
+| Tech | One-liner | Use when |
+|------|-----------|----------|
+| **Scaling SQLite (walsync)** | Embedded SQLite + async WAL shipping via HTTP. Single-writer, multi-reader. | Read-heavy workload, single geographic writer, multiple read replicas |
+
 ## Decision Guide — "Which API tech should I use?"
 
 ```
@@ -303,6 +319,9 @@ Need to atomically update DB + publish event?
 Coordinated transaction across resources with blocking?
   → 2PC (prepare + commit, but coordinator crash = blocked)
 
+Scale SQLite reads across multiple servers?
+  → walsync (embedded SQLite + async WAL shipping, single-writer + multi-reader)
+
 ## Scalability Rating
 
 Rating scalability semua teknologi across 5 dimensi (horizontal, throughput, stateless, geographic, backpressure). Lihat: [`docs/scalability-rating.md`](docs/scalability-rating.md)
@@ -352,6 +371,12 @@ Pertanyaan yang sering muncul, dikelompokkan per level. Lihat: [`faq/README.md`]
 - [2PC vs Saga: kapan pakai yang mana?](faq/README.md#2pc-vs-saga-kapan-pakai-yang-mana)
 - [Transactional Outbox: kenapa perlu?](faq/README.md#transactional-outbox-kenapa-perlu)
 
+### Production
+
+- [walsync vs LiteFS vs rqlite: bedanya apa?](faq/README.md#walsync-vs-litefs-vs-rqlite-bedanya-apa)
+- [Kenapa walsync single-writer, tidak support multi-writer?](faq/README.md#kenapa-walsync-single-writer-tidak-support-multi-writer)
+- [walsync sync delay berapa ms?](faq/README.md#walsync-sync-delay-berapa-ms)
+
 ### General
 
 - [Mana yang paling sering dipakai di production?](faq/README.md#16-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
@@ -361,7 +386,7 @@ Pertanyaan yang sering muncul, dikelompokkan per level. Lihat: [`faq/README.md`]
 
 ## What's Next
 
-Semua 4 level selesai! 🎉 Project ini sekarang punya 16 modul dari Beginner sampai Expert.
+Semua 5 level selesai! 🎉 Project ini sekarang punya 17 modul dari Beginner sampai Production, termasuk [walsync](https://github.com/maulanashalihin/walsync) — SQLite WAL shipping replication tool yang sudah di-deploy dan di-benchmark di server real.
 
 **Langkah selanjutnya untuk pendalaman:**
 

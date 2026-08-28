@@ -290,6 +290,113 @@ fetch("https://server:3001/", { protocol: "http3" });
 
 **Praktik nyata:** mayoritas API masih HTTP/1.1 atau HTTP/2. HTTP/3 growing tapi belum mainstream. CDN (Cloudflare, Vercel) auto-negotiate: client yang support HTTP/3 pakai HTTP/3, sisanya fallback.
 
+## Kenapa Ada 3 Generasi?
+
+Setiap generasi HTTP lahir karena **masalah nyata di generasi sebelumnya**. Bukan bikin baru karena bosan — tapi karena bottleneck yang tidak bisa di-fix tanpa ganti protocol.
+
+### HTTP/1.0 → HTTP/1.1: "Connection mahal"
+
+**Masalah HTTP/1.0:** setiap request buka TCP connection baru → close setelah response.
+
+```
+Request 1: TCP handshake (1 RTT) → GET /tasks → response → TCP close
+Request 2: TCP handshake (1 RTT) → GET /users → response → TCP close
+Request 3: TCP handshake (1 RTT) → GET /orders → response → TCP close
+
+3 request = 3 TCP handshake = 3 RTT buang-buang
+Halaman web 2000-an: 50 resource (CSS, JS, images) = 50 TCP handshake
+```
+
+**Solusi HTTP/1.1:** keep-alive — reuse TCP connection untuk multiple request.
+
+```
+TCP handshake (1 RTT) → GET /tasks → GET /users → GET /orders → TCP close
+3 request = 1 TCP handshake
+```
+
+**Tapi muncul masalah baru:** request masih **serial** di satu connection. GET /tasks yang lambat block GET /users. Browser workaround: 6 parallel connections per domain — tapi itu hack, bukan solution.
+
+### HTTP/1.1 → HTTP/2: "Head-of-line blocking"
+
+**Masalah HTTP/1.1:** satu connection = satu request pada satu waktu. Request lambat block request berikutnya.
+
+```
+Connection 1: GET /tasks (2000ms) ──── GET /fast (1ms)
+                                    ↑
+                              /fast nunggu 2000ms
+
+Browser bikin 6 connection untuk workaround:
+Conn 1: GET /tasks (2000ms) ────────
+Conn 2: GET /fast (1ms) ─┤
+Conn 3: GET /users ────
+...
+Tapi 6 connection = 6 TCP handshake, 6 TLS handshake, 6x memory
+```
+
+**Solusi HTTP/2:** multiplexing — multiple stream concurrent di **satu** connection.
+
+```
+1 TCP connection:
+  Stream 1: GET /tasks (2000ms) ────────────┤
+  Stream 3: GET /fast (1ms) ─┤               ← langsung selesai!
+  Stream 5: GET /users (50ms) ────┤
+
+1 connection, 3 request concurrent, 0 blocking
+```
+
+Bonus: HPACK header compression (header tidak dikirim ulang), binary framing (efisien dari text).
+
+**Tapi muncul masalah baru:** TCP punya head-of-line blocking sendiri. Kalau 1 TCP packet loss, **semua stream** nunggu retransmit — bukan cuma stream yang packet-nya loss.
+
+### HTTP/2 → HTTP/3: "TCP head-of-line blocking"
+
+**Masalah HTTP/2:** multiplexing solve application-level blocking, tapi TCP layer masih blocking.
+
+```
+1 TCP connection, 3 stream:
+  Stream 1: ├──── /tasks ────────────────┤
+  Stream 3: ├─ /fast ─┤                   ← sudah selesai
+  Stream 5: ├──── /users ───────────┤
+
+Kalau packet untuk stream 5 loss:
+  TCP: tunggu retransmit packet 5
+  Stream 1: BLOCKED (nunggu TCP retransmit, padahal packet-nya sudah sampai)
+  Stream 3: BLOCKED (sudah selesai tapi TCP buffer penuh)
+
+TCP tidak tahu stream mana yang loss — dia cuma lihat byte sequence number
+```
+
+**Solusi HTTP/3:** ganti TCP → QUIC (UDP). QUIC implement multiplexing **di transport layer**, bukan di application layer. Setiap stream punya packet sequence number sendiri.
+
+```
+1 QUIC connection (UDP), 3 stream:
+  Stream 1: ├──── /tasks ────────────────┤
+  Stream 3: ├─ /fast ─┤
+  Stream 5: ├──── /users ───────────┤
+
+Kalau packet stream 5 loss:
+  QUIC: retransmit cuma packet stream 5
+  Stream 1: TIDAK BLOCKED (packet-nya sudah sampai, lanjut)
+  Stream 3: TIDAK BLOCKED (sudah selesai)
+
+Bonus: 1-RTT connection setup (TCP+TLS = 2-3 RTT), connection migration (IP change OK)
+```
+
+### Rangkuman: masalah → solusi → masalah baru
+
+```
+HTTP/1.0: connection mahal (3 RTT per request)
+    ↓ solusi: keep-alive
+HTTP/1.1: request serial (HOL blocking di application)
+    ↓ solusi: multiplexing
+HTTP/2:   packet loss block semua stream (HOL blocking di TCP)
+    ↓ solusi: QUIC (per-stream retransmit)
+HTTP/3:   UDP di-block firewall, CPU intensive, belum universal
+    ↓ (masih cari solusi — adoption growing)
+```
+
+Setiap generasi **solve bottleneck sebelumnya tapi buka bottleneck baru**. Tidak ada protocol yang perfect — ada tradeoff. HTTP/1.1 simple tapi serial. HTTP/2 cepat tapi TCP-bound. HTTP/3 bebas TCP tapi UDP belum di-support semua network.
+
 ## Evolusi HTTP
 
 ```
@@ -299,12 +406,6 @@ HTTP/1.1 (1997)  → keep-alive, chunked transfer, Host header
 HTTP/2   (2015)  → multiplexing, HPACK, binary, server push
 HTTP/3   (2022)  → QUIC/UDP, 0-RTT, connection migration, QPACK
 ```
-
-Setiap generasi solve masalah generasi sebelumnya:
-
-- 1.0 → 1.1: connection reuse (keep-alive)
-- 1.1 → 2: multiplexing (no HOL blocking) + header compression
-- 2 → 3: TCP → UDP (no TCP HOL blocking) + connection migration
 
 ## Struktur File
 

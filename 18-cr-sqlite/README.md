@@ -85,13 +85,13 @@ bun run 18-cr-sqlite/node.ts 2 3002 /tmp/node2.db ./crsqlite.so http://localhost
 ### 4. Write + verify
 
 ```bash
-# Write ke Node 1 (demo endpoint di port+10000)
-curl -X POST http://localhost:13001/write \
+# Write ke Node 1
+curl -X POST http://localhost:3001/write \
   -H 'Content-Type: application/json' \
   -d '{"id":1,"name":"Alice","city":"Singapore"}'
 
 # Write ke Node 2
-curl -X POST http://localhost:13002/write \
+curl -X POST http://localhost:3002/write \
   -H 'Content-Type: application/json' \
   -d '{"id":2,"name":"Bob","city":"Jakarta"}'
 
@@ -130,6 +130,7 @@ Bun.serve({
 
 // Write NORMAL — tidak lewat HTTP, CRDT metadata auto-tracked
 db.query("INSERT INTO users VALUES (?, ?, ?)").run(1, "Alice", "Singapore");
+```
 
 ## API Endpoints
 
@@ -159,60 +160,19 @@ bun run node.ts <node-id> <port> <db-path> <extension> [cert-path] [key-path] [p
 | Env Var | Default | Description |
 |---|---|---|
 | `SYNC_INTERVAL` | `2000` | Push loop interval in ms (best: `50`) |
-| `BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CLIENT` | (off) | Set `1` for HTTP/3 fetch support |
 
-## Tested: 2-Server Cross-Server Replication
+## Tested: Cross-Server Replication
 
-Tested dengan Bun 1.4.0 di 2 server fisik berbeda:
-
-| Node | Server | Location |
-|---|---|---|
-| Node 1 | OVH VPS (51.79.159.231) | Singapore |
-| Node 2 | Underconst VPS (185.111.159.99) | Bandung |
-
-### Results
+Tested dengan Bun 1.4.0 di 2 server fisik berbeda (OVH Singapore ↔ Underconst Bandung):
 
 | Test | Result |
 |---|---|
 | Write di kedua node → converge | ✅ ~319ms (50ms interval, HTTP/1.1) |
-| Conflict (Tokyo vs Paris) → converge | ✅ Tokyo (LWW, later db_version wins) |
-| `bun:sqlite` `loadExtension()` | ✅ Works on Bun 1.4.0 Linux |
-| Cross-server HTTP/1.1 sync | ✅ OVH ↔ Underconst via public internet |
-| Cross-server HTTP/3 sync | ✅ HTTP/3 (QUIC) works, but 4-5x slower write phase |
-| Config finder (10 configs) | ✅ Best: HTTP/1.1 + 50ms interval = 319ms batch latency |
+| Conflict (Tokyo vs Paris) → converge | ✅ LWW, later db_version wins |
+| Cross-server HTTP/1.1 sync | ✅ via public internet |
+| Cross-server HTTP/3 sync | ✅ works, but 4-5x slower (TLS handshake overhead) |
 
-### Benchmark (Bun 1.4.0, OVH 6 vCPU, HDD, SQLite 3.46)
-
-| Metric | cr-sqlite (CRR) | Plain SQLite | Overhead |
-|---|---:|---:|---|
-| Read QPS | 337K | 328K | ~0% (sama) |
-| Write QPS | 25K | 105K | -76% (4.2x slower) |
-
-Read = native SQLite speed (CRDT metadata zero read overhead). Write 4.2x slower karena CRDT trigger + metadata per row per column.
-
-### Config Finder: HTTP/1.1 vs HTTP/3 × Sync Interval
-
-Tested cross-server (OVH Singapore ↔ Underconst Bandung, Bun 1.4.0): 50 writes rapid-fire, measure batch propagation latency (write → all 50 appear di peer).
-
-| Protocol | Interval | Batch Latency | Write Phase |
-|---|---|---:|---:|
-| HTTP/1.1 | 2000ms | 1040ms | 13ms |
-| HTTP/1.1 | 500ms | 394ms | 13ms |
-| HTTP/1.1 | 100ms | 377ms | 15ms |
-| **HTTP/1.1** | **50ms** | **319ms** | **12ms** |
-| HTTP/1.1 | 10ms | 382ms | 13ms |
-| HTTP/3 | 2000ms | 411ms | 63ms |
-| HTTP/3 | 500ms | 332ms | 63ms |
-| HTTP/3 | 100ms | 685ms | 72ms |
-| HTTP/3 | 50ms | 581ms | 77ms |
-| HTTP/3 | 10ms | 348ms | 83ms |
-
-**Best config: HTTP/1.1 + 50ms sync interval — 319ms batch latency.**
-
-Findings:
-- HTTP/3 write phase 4-5x lebih lambat (63-83ms vs 12-15ms) — TLS/QUIC handshake overhead per fetch. HTTP/3 experimental di Bun 1.4 belum optimal untuk rapid-fire small POST.
-- Interval 50ms optimal — 10ms tidak lebih cepat karena polling overhead. 2000ms paling lambat (push loop cuma fire tiap 2s).
-- HTTP/3 baru menang kalau: connection reuse jangka panjang, packet loss tinggi, atau multiple peers concurrent. Untuk single-peer batch sync, HTTP/1.1 cukup.
+**Benchmark (Bun 1.4.0, OVH 6 vCPU):** Read 337K QPS (zero CRDT overhead), Write 25K QPS (4.2x CRDT overhead). HTTP/1.1 + 50ms interval = best config. HTTP/3 tidak worth untuk server-to-server (TLS handshake per fetch, no connection pooling di Bun 1.4).
 
 ## Gotchas
 
@@ -274,11 +234,9 @@ cr-sqlite tidak punya built-in transport. Module ini implement HTTP changeset ex
 | File | Description |
 |---|---|
 | `db.ts` | Library: `openDB()` — load extension, create schema, mark CRR tables |
-| `sync.ts` | Library: `syncRoutes()` route handler + `startPushLoop()` background push. Tidak bikin server sendiri. |
-| `node.ts` | Node app: SATU `Bun.serve` — route app + sync. HTTP/1.1 atau HTTP/3 (TLS). `SYNC_INTERVAL` env var. |
-| `demo.ts` | 2-node local demo orchestration (self-signed cert, HTTP/3) |
-| `bench-config.ts` | Config finder: HTTP/1.1 vs HTTP/3 × 5 intervals, batch propagation latency |
-| `cross-server-http3.sh` | Manual cross-server HTTP/3 test script |
+| `sync.ts` | Library: `syncRoutes()` route handler + `startPushLoop()` background push |
+| `node.ts` | Node app: SATU `Bun.serve` — route app + sync. HTTP/1.1 atau HTTP/3 (TLS) |
+| `demo.ts` | 2-node local demo: start → write → converge → conflict test → cleanup |
 
 ## Further Reading
 

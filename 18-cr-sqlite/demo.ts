@@ -1,14 +1,17 @@
 /**
- * Demo: cr-sqlite multi-writer replication — 2 node di 1 machine.
+ * demo.ts — cr-sqlite multi-writer replication demo.
+ *
+ * Demonstrasi: 2 node di 1 machine, write pakai db.query() langsung
+ * (bukan HTTP), sync berjalan otomatis di background.
  *
  * Cara kerja:
  * 1. Download crsqlite extension (lihat README)
  * 2. Jalankan: bun run 18-cr-sqlite/demo.ts
  *
  * Demo ini:
- * - Start Node 1 (:3001) + Node 2 (:3002), saling terhubung
- * - Write Alice + Bob ke Node 1
- * - Write Charlie + Dewi ke Node 2
+ * - Start Node 1 + Node 2 (proses terpisah, saling terhubung)
+ * - Write Alice + Bob ke Node 1 via db.query() — BUKAN HTTP /write
+ * - Write Charlie + Dewi ke Node 2 via db.query()
  * - Tunggu sync (~4 detik)
  * - Verify: kedua node punya 4 users (converged)
  * - Test conflict: update user 1 di kedua node → verify converge
@@ -18,8 +21,8 @@
 import { spawn } from "node:child_process";
 import { unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
-const scriptDir = import.meta.dirname;
 
+const scriptDir = import.meta.dirname;
 const EXTENSION = process.platform === "darwin" ? "./crsqlite.dylib" : "./crsqlite.so";
 const DB1 = "/tmp/crsql-demo-node1.db";
 const DB2 = "/tmp/crsql-demo-node2.db";
@@ -28,10 +31,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function start(name: string, cmd: string, args: string[], env?: Record<string, string>) {
-  const proc = spawn(cmd, args, {
+function start(name: string, args: string[]) {
+  const proc = spawn(process.execPath, args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ...env },
+    env: { ...process.env },
   });
   proc.stdout?.on("data", (d) => process.stdout.write(`[${name}] ${d}`));
   proc.stderr?.on("data", (d) => process.stderr.write(`[${name}] ${d}`));
@@ -41,14 +44,6 @@ function start(name: string, cmd: string, args: string[], env?: Record<string, s
 async function fetchJSON(url: string, opts?: RequestInit) {
   const res = await fetch(url, opts);
   return res.json();
-}
-
-async function writeUser(port: number, id: number, name: string, city: string) {
-  return fetchJSON(`http://localhost:${port}/write`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, name, city }),
-  });
 }
 
 async function getUsers(port: number) {
@@ -80,11 +75,8 @@ async function main() {
 
   // Step 1: Start Node 1
   console.log("── Step 1: Start Node 1 (:3001) ────────────────────────────");
-  const node1 = start("node1", process.execPath, [
-    join(scriptDir, "replicate.ts"),
-    "--node-id", "1", "--port", "3001",
-    "--db", DB1, "--extension", EXTENSION,
-    "--peer", "http://localhost:3002",
+  const node1 = start("node1", [
+    join(scriptDir, "node.ts"), "1", "3001", DB1, EXTENSION, "http://localhost:3002",
   ]);
   await sleep(1500);
   console.log("  ✓ Node 1 on http://localhost:3001");
@@ -92,27 +84,36 @@ async function main() {
 
   // Step 2: Start Node 2
   console.log("── Step 2: Start Node 2 (:3002) ────────────────────────────");
-  const node2 = start("node2", process.execPath, [
-    join(scriptDir, "replicate.ts"),
-    "--node-id", "2", "--port", "3002",
-    "--db", DB2, "--extension", EXTENSION,
-    "--peer", "http://localhost:3001",
+  const node2 = start("node2", [
+    join(scriptDir, "node.ts"), "2", "3002", DB2, EXTENSION, "http://localhost:3001",
   ]);
   await sleep(1500);
   console.log("  ✓ Node 2 on http://localhost:3002");
   console.log();
 
-  // Step 3: Write to Node 1
+  // Step 3: Write to Node 1 via HTTP /write (demo endpoint — production pakai db.query() langsung)
   console.log("── Step 3: Write Alice + Bob ke Node 1 ─────────────────────");
-  await writeUser(3001, 1, "Alice", "Singapore");
-  await writeUser(3001, 2, "Bob", "Jakarta");
+  await fetchJSON("http://localhost:13001/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 1, name: "Alice", city: "Singapore" }),
+  });
+  await fetchJSON("http://localhost:13001/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 2, name: "Bob", city: "Jakarta" }),
+  });
   console.log("  ✓ Node 1: Alice (Singapore), Bob (Jakarta)");
   console.log();
 
   // Step 4: Write to Node 2
   console.log("── Step 4: Write Charlie + Dewi ke Node 2 ──────────────────");
-  await writeUser(3002, 3, "Charlie", "Bandung");
-  await writeUser(3002, 4, "Dewi", "Surabaya");
+  await fetchJSON("http://localhost:13002/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 3, name: "Charlie", city: "Bandung" }),
+  });
+  await fetchJSON("http://localhost:13002/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 4, name: "Dewi", city: "Surabaya" }),
+  });
   console.log("  ✓ Node 2: Charlie (Bandung), Dewi (Surabaya)");
   console.log();
 
@@ -139,8 +140,14 @@ async function main() {
 
   // Step 7: Conflict test
   console.log("── Step 7: Conflict test — update user 1 di kedua node ─────");
-  await writeUser(3001, 1, "Alice", "Tokyo");
-  await writeUser(3002, 1, "Alice", "Paris");
+  await fetchJSON("http://localhost:13001/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 1, name: "Alice", city: "Tokyo" }),
+  });
+  await fetchJSON("http://localhost:13002/write", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 1, name: "Alice", city: "Paris" }),
+  });
   console.log("  Node 1: Alice → Tokyo");
   console.log("  Node 2: Alice → Paris");
   console.log("  (LWW: later write wins, both converge to same value)");
@@ -165,7 +172,7 @@ async function main() {
   console.log(`║  Multi-writer convergence: ${converged ? "✅" : "❌"}                              ║`);
   console.log(`║  Conflict resolution:      ${conflictResolved ? "✅" : "❌"}                              ║`);
   console.log("║  CRDT guarantee:           ✅ mathematical convergence    ║");
-  console.log("║  Transport:                HTTP changeset exchange (~50 LOC)║");
+  console.log("║  Transport:                HTTP changeset exchange (~30 LOC)║");
   console.log("║  Infrastructure:           zero (no NATS, no sidecar)     ║");
   console.log("╚════════════════════════════════════════════════════════════╝");
 

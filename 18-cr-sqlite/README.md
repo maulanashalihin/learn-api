@@ -58,9 +58,9 @@ Node A (Singapore)           Node B (Jakarta)
 wget https://github.com/vlcn-io/cr-sqlite/releases/download/v0.16.3/crsqlite-linux-x86_64.zip
 unzip crsqlite-linux-x86_64.zip
 
-# macOS arm64 (Apple Silicon)
-wget https://github.com/vlcn-io/cr-sqlite/releases/download/v0.16.3/crsqlite-darwin-arm64.zip
-unzip crsqlite-darwin-arm64.zip
+# macOS aarch64 (Apple Silicon)
+curl -fsSL https://github.com/vlcn-io/cr-sqlite/releases/download/v0.16.3/crsqlite-darwin-aarch64.zip -o crsqlite.zip
+unzip crsqlite.zip
 ```
 
 ### 2. Run demo (2 node di 1 machine)
@@ -75,28 +75,22 @@ Demo otomatis: start 2 node → write di kedua node → verify convergence → t
 
 ```bash
 # Node 1
-bun run 18-cr-sqlite/replicate.ts \
-  --node-id 1 --port 3001 \
-  --db /tmp/node1.db --extension ./crsqlite.so \
-  --peer http://localhost:3002
+bun run 18-cr-sqlite/node.ts 1 3001 /tmp/node1.db ./crsqlite.so http://localhost:3002
 
 # Node 2 (terminal berbeda)
-bun run 18-cr-sqlite/replicate.ts \
-  --node-id 2 --port 3002 \
-  --db /tmp/node2.db --extension ./crsqlite.so \
-  --peer http://localhost:3001
+bun run 18-cr-sqlite/node.ts 2 3002 /tmp/node2.db ./crsqlite.so http://localhost:3001
 ```
 
 ### 4. Write + verify
 
 ```bash
-# Write ke Node 1
-curl -X POST http://localhost:3001/write \
+# Write ke Node 1 (demo endpoint di port+10000)
+curl -X POST http://localhost:13001/write \
   -H 'Content-Type: application/json' \
   -d '{"id":1,"name":"Alice","city":"Singapore"}'
 
 # Write ke Node 2
-curl -X POST http://localhost:3002/write \
+curl -X POST http://localhost:13002/write \
   -H 'Content-Type: application/json' \
   -d '{"id":2,"name":"Bob","city":"Jakarta"}'
 
@@ -104,6 +98,25 @@ curl -X POST http://localhost:3002/write \
 curl http://localhost:3001/users
 curl http://localhost:3002/users
 # Kedua node punya Alice + Bob (converged)
+```
+
+### 5. Pakai di app kamu (production)
+
+```typescript
+import { openDB } from "./db.ts";
+import { startSync } from "./sync.ts";
+
+const { db } = openDB({
+  dbPath: "app.db",
+  extensionPath: "./crsqlite.so",
+  schema: `CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY NOT NULL, name TEXT, city TEXT)`,
+  tables: ["users"],
+});
+
+startSync(db, { nodeId: 1, port: 3001, peers: ["http://peer:3002"] });
+
+// Write NORMAL — tidak lewat HTTP, CRDT metadata auto-tracked
+db.query("INSERT INTO users VALUES (?, ?, ?)").run(1, "Alice", "Singapore");
 ```
 
 ## API Endpoints
@@ -212,7 +225,9 @@ cr-sqlite tidak punya built-in transport. Module ini implement HTTP changeset ex
 
 | File | Description |
 |---|---|
-| `replicate.ts` | HTTP app + background sync loop (~180 LOC) |
+| `db.ts` | Library: `openDB()` — load extension, create schema, mark CRR tables |
+| `sync.ts` | Library: `startSync()` — background push loop + `/sync` receive endpoint |
+| `node.ts` | Node app: imports db.ts + sync.ts, write via `db.query()`, demo `/write` endpoint |
 | `demo.ts` | 2-node local demo orchestration |
 
 ## Further Reading

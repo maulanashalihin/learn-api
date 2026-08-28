@@ -6,7 +6,7 @@ Project belajar **API technologies** dari Beginner sampai Production. Setiap tek
 
 | Resource | Isi |
 |----------|-----|
-| [Learning Map](#learning-map) | 17 modul dari Beginner sampai Production |
+| [Learning Map](#learning-map) | 19 modul dari Beginner sampai Production |
 | [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
 | [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
 | [Scalability Rating](docs/scalability-rating.md) | 18 teknologi dirating across 5 dimensi scalability |
@@ -50,6 +50,7 @@ Project belajar **API technologies** dari Beginner sampai Production. Setiap tek
 🟣 PRODUCTION ──────────────────────────────────────────── ✅ DONE
   17-walsync/                 walsync                 WAL shipping replication, single-writer + multi-reader
   18-cr-sqlite/               cr-sqlite               CRDT multi-writer replication, write di mana saja, converge
+  19-http-protocols/          HTTP Protocols          HTTP/1.1 vs HTTP/2 vs HTTP/3 — multiplexing, QUIC, head-of-line blocking
 ```
 
 ## Quick Start
@@ -80,6 +81,7 @@ npm run consensus        # 15-consensus:  Raft leader election, log replication,
 npm run dist-tx          # 16-dist-tx:    2PC, Saga, transactional outbox
 npm run walsync         # 17-walsync:   walsync WAL shipping replication demo
 npm run cr-sqlite       # 18-cr-sqlite: cr-sqlite CRDT multi-writer replication demo
+npm run http-protocols  # 19-http:     HTTP/1.1 vs HTTP/2 side-by-side (head-of-line blocking demo)
 
 # Typecheck everything
 npm run typecheck

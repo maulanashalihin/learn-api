@@ -137,13 +137,17 @@ Overhead 5-15ms per write (Raft round-trip). Cocok untuk small distributed syste
 
 ```
 Node A: write user 1 ─┐
-Node B: write user 2 ──┼── gossip ──→ semua node converge
+Node B: write user 2 ──┼── SWIM gossip + 2PC ──→ semua node converge
 Node C: write user 3 ─┘
 ```
 
-Setiap node punya SQLite sendiri, semua bisa write. Changes broadcast via gossip protocol. **No leader** — gak ada downtime saat failover.
+Setiap node punya SQLite sendiri, semua bisa write. Sync via 3 layer:
 
-Conflict resolution: last-write-wins dengan HLC timestamp. Consistency configurable: `ONE`, `QUORUM`, `ALL`.
+1. **CDC** — SQLite preupdate hook capture row-level changes, encode jadi msgpack bytes (bukan SQL replay)
+2. **2PC (Percolator-style)** — coordinator broadcast row bytes ke semua node, PREPARE → quorum ACK → COMMIT. Consistency configurable: `ONE`, `QUORUM`, `ALL`
+3. **SWIM gossip + anti-entropy** — cluster membership & failure detection. Background repair untuk catch-up node yang tertinggal
+
+Conflict resolution: last-write-wins dengan HLC timestamp. Tie-breaker: node ID lebih tinggi menang.
 
 Unik: akses via **MySQL protocol** — pakai mysql CLI, DBeaver, dll. Marmot transpile MySQL → SQLite di belakang. App pikir connect ke MySQL, padahal SQLite yang ter-replicate.
 

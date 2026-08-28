@@ -1,6 +1,6 @@
 # SQLite Replication & Sync
 
-Catatan tentang sinkronisasi SQLite antar server: dari Kafka sebagai transport, kenapa CDC SQLite sulit, sampai tools purpose-built untuk multi-node replication.
+Catatan tentang sinkronisasi SQLite antar server: dari backup (Litestream) sampai tools purpose-built untuk multi-node replication.
 
 ---
 
@@ -17,47 +17,7 @@ SQLite adalah embedded database — tidak punya built-in replication seperti Pos
 
 ---
 
-## Approach 1: Kafka sebagai transport
-
-Kafka bukan database sync tool. Kafka adalah event log — angkut event dari A ke B. Yang sync database-nya adalah pattern di sekitar Kafka.
-
-### Cara kerja
-
-```
-Server A                              Server B
-  1. App write to SQLite                4. Consumer baca event
-  2. Capture change (CDC/outbox)   →    5. Apply ke SQLite lokal
-  3. Publish event ke Kafka
-```
-
-Ada 2 cara capture change:
-
-**CDC otomatis** — tool baca transaction log database, publish ke Kafka. Tidak ubah app code. Contoh: Debezium.
-
-**App-level manual** — app tulis ke DB + outbox table di transaction yang sama, poller publish ke Kafka. Ini Transactional Outbox pattern (lihat modul 16).
-
-### Kenapa tidak cocok untuk SQLite?
-
-CDC butuh akses ke transaction log (WAL/binlog). PostgreSQL/MySQL punya log yang documented dan streamable. SQLite punya WAL, tapi:
-
-- Format internal, tidak documented untuk external consumption
-- WAL bisa di-checkpoint (merged ke main DB) kapan saja
-- Tidak ada API untuk stream changes secara reliable
-
-Debezium punya SQLite connector tapi masih **incubating/experimental** (dibuat Jun 2026, 1 star). Mereka fallback ke trigger + polling — lambat dan invasif.
-
-### Verdict
-
-```
-Kafka untuk sync SQLite = overkill untuk 2-3 node.
-Cocok hanya kalau sudah punya Kafka infra + banyak consumer.
-
-Kalau cuma butuh sync SQLite antar server → pakai tool purpose-built (di bawah).
-```
-
----
-
-## Approach 2: Litestream (backup, bukan multi-node)
+## Approach 1: Litestream (backup, bukan multi-node)
 
 Litestream adalah sidecar yang stream SQLite WAL ke S3/cloud storage. Bukan multi-node — tapi ini fondasi konsep yang dipakai tool lain.
 
@@ -88,7 +48,7 @@ Litestream hanya **backup + disaster recovery**. Restore manual. Tidak ada live 
 
 ---
 
-## Approach 3: Multi-node replication tools
+## Approach 2: Multi-node replication tools
 
 Litestream hanya backup. Untuk multi-node, ada beberapa tools dengan tradeoff berbeda:
 
@@ -217,7 +177,6 @@ Butuh embedded library, strong consistency, no standalone process?
 - [Litestream — How it works](https://litestream.io/how-it-works/)
 - [Litestream — SQLITE_INTERNALS.md](https://github.com/benbjohnson/litestream/blob/main/docs/SQLITE_INTERNALS.md)
 - [Litestream — wal_reader.go](https://github.com/benbjohnson/litestream/blob/main/wal_reader.go)
-- [Debezium SQLite connector](https://github.com/debezium/debezium-connector-sqlite)
 - [rqlite FAQ](https://rqlite.io/docs/faq/)
 - [Marmot docs](https://maxpert.github.io/marmot/)
 - [LiteFS vs Litestream vs rqlite vs dqlite on VPS 2025](https://onidel.com/blog/sqlite-replication-vps-2025)

@@ -242,11 +242,54 @@ walsync pilih: single-writer, zero overhead, embedded speed. Niche = read-heavy 
 
 Sync delay = network latency + WAL ship time. walsync debounce WAL changes (50ms default) untuk batch multiple writes into one ship. Jadi single write = ~50ms debounce + ~20ms network = ~70ms. Burst = satu ship untuk semua.
 
+
+### cr-sqlite vs walsync: bedanya apa?
+
+| | walsync (Module 17) | cr-sqlite (Module 18) |
+|---|---|---|
+| **Writer** | 1 primary, N read-only | N nodes, semua write |
+| **Conflict** | tidak ada (single writer) | CRDT per-column (LWW) |
+| **Write QPS** | 84K (native SQLite) | 25K (4.2x CRDT overhead) |
+| **Convergence** | N/A | mathematical (CRDT guarantee) |
+| **Best for** | read-heavy, single-region | multi-region write, edge |
+
+walsync: satu yang write, sisanya baca. Cepat karena zero overhead. cr-sqlite: semua bisa write, converge otomatis. Tapi 4x lebih lambat write-nya karena CRDT metadata per row per column.
+
+### cr-sqlite write kenapa 4x lebih lambat?
+
+Setiap write ke CRR table, cr-sqlite trigger capture metadata: `col_version`, `db_version`, `site_id` per column. Ini yang bikin converge possible — tapi juga bikin write 4.2x lebih lambat dari plain SQLite (25K vs 105K QPS).
+
+Read tidak ada overhead (337K vs 328K QPS) — metadata cuma di-write, tidak di-read saat SELECT normal.
+
+### HTTP/3 kenapa tidak worth untuk server-to-server?
+
+Benchmark cross-server (OVH Singapore ↔ Underconst Bandung, Bun 1.4.0):
+
+```
+HTTP/1.1 + 50ms interval: 319ms batch latency, 12ms per write  ← BEST
+HTTP/3   + 50ms interval: 581ms batch latency, 77ms per write  ← 2x lebih lambat
+```
+
+HTTP/3 (QUIC) unggul di: packet loss tinggi, IP berubah (mobile), cold start (1 RTT). Server-to-server di VPS: network stabil, IP statis, connection long-lived → keunggulan HTTP/3 tidak terpakai. TLS handshake per fetch (Bun 1.4 tidak ada QUIC connection pooling) jadi overhead tanpa benefit.
+
+HTTP/3 worth untuk: CDN → browser (Cloudflare auto-negotiate), mobile app → API (connection migration WiFi→4G).
+
+### HTTP/1.1 masih dipakai di mana?
+
+Mayoritas API di dunia masih HTTP/1.1:
+
+- **Internal microservice** — 1 request → 1 response, keep-alive cukup
+- **Server-to-server sync** — cr-sqlite, walsync, webhook delivery
+- **Database wire protocol** — PostgreSQL, MySQL, Redis (serial per connection)
+- **Public REST API** — Stripe, GitHub, Twitter API (simple, universal, debuggable)
+
+HTTP/2 dan HTTP/3 unggul untuk **concurrent request** (website: 50 resources parallel) dan **unstable network** (mobile). API pattern = 1 request → 1 response → selesai, tidak butuh multiplexing.
+
 ---
 
 ## General
 
-### 18 teknologi ini, mana yang paling sering dipakai di production?
+### 19 teknologi ini, mana yang paling sering dipakai di production?
 
 Top 5 paling common:
 

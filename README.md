@@ -196,15 +196,22 @@ learn-api/
 │   └── README.md
 │
 ├── 18-cr-sqlite/
-│   ├── replicate.ts          # Bun app: HTTP server + CRDT changeset sync, multi-writer
-│   ├── demo.ts               # 2-node local demo: write both nodes, verify convergence + conflict
+│   ├── db.ts                # Library: openDB() — load crsqlite extension, mark CRR tables
+│   ├── sync.ts              # Library: syncRoutes() + startPushLoop() — changeset exchange
+│   ├── node.ts              # Bun app: SATU Bun.serve — route app + sync, HTTP/1.1 atau HTTP/3
+│   ├── demo.ts              # 2-node local demo: write both nodes, verify convergence + conflict
+│   └── README.md
+│
+├── 19-http-protocols/
+│   ├── server.ts            # HTTP/1.1 (port 3011) + HTTP/2 (port 3012) side-by-side demo
+│   ├── cert.ts              # Self-signed cert generator untuk HTTP/2 TLS
 │   └── README.md
 │
 ├── faq/
 │   └── README.md             # FAQ: common questions per level + general
 │
 ├── docs/
-│   ├── scalability-rating.md   # Scalability rating: 17 techs across 5 dimensions
+│   ├── scalability-rating.md   # Scalability rating: 19 techs across 5 dimensions
 │   └── sqlite-replication-notes.md # SQLite replication: Kafka CDC, Debezium, Litestream, multi-node tools
 ├── package.json              # Scripts for all modules
 └── tsconfig.json             # Shared TypeScript config
@@ -267,6 +274,8 @@ learn-api/
 | Tech | One-liner | Use when |
 |------|-----------|----------|
 | **Scaling SQLite (walsync)** | Embedded SQLite + async WAL shipping via HTTP. Single-writer, multi-reader. | Read-heavy workload, single geographic writer, multiple read replicas |
+| **CRDT Multi-Writer (cr-sqlite)** | CRDT-based SQLite replication. N nodes write independen, converge secara matematis. | Multi-region write, edge, offline-first |
+| **HTTP Protocols** | HTTP/1.1 (serial) → HTTP/2 (multiplexed) → HTTP/3 (QUIC/UDP). Evolusi transport layer. | Pahami tradeoff transport — kapan pakai yang mana |
 
 ## Decision Guide — "Which API tech should I use?"
 
@@ -330,6 +339,12 @@ Coordinated transaction across resources with blocking?
 
 Scale SQLite reads across multiple servers?
   → walsync (embedded SQLite + async WAL shipping, single-writer + multi-reader)
+
+Multiple nodes write to same SQLite, must converge?
+  → cr-sqlite (CRDT multi-writer, per-column LWW, mathematical convergence)
+
+Need to understand HTTP transport tradeoffs?
+  → HTTP/1.1 (simple, API-to-API) → HTTP/2 (multiplexing, website) → HTTP/3 (mobile, QUIC)
 ```
 
 ## Scalability Rating
@@ -347,6 +362,7 @@ Rating scalability semua teknologi across 5 dimensi (horizontal, throughput, sta
 | 15 | Consensus (Raft) | 4.6 | Leader = bottleneck, by design |
 | 16 | Distributed Transactions | 3.6 | Blocking locks, by design |
 | 17 | Scaling SQLite (walsync) | 7.0 | Read replicas scale horizontally, single-writer bottleneck |
+| 18 | CRDT Multi-Writer (cr-sqlite) | 7.8 | Multi-writer, no leader, geographic scale — write overhead 4.2x |
 
 ## FAQ
 
@@ -387,17 +403,21 @@ Pertanyaan yang sering muncul, dikelompokkan per level. Lihat: [`faq/README.md`]
 - [walsync vs LiteFS vs rqlite: bedanya apa?](faq/README.md#walsync-vs-litefs-vs-rqlite-bedanya-apa)
 - [Kenapa walsync single-writer, tidak support multi-writer?](faq/README.md#kenapa-walsync-single-writer-tidak-support-multi-writer)
 - [walsync sync delay berapa ms?](faq/README.md#walsync-sync-delay-berapa-ms)
+- [cr-sqlite vs walsync: bedanya apa?](faq/README.md#cr-sqlite-vs-walsync-bedanya-apa)
+- [cr-sqlite write kenapa 4x lebih lambat?](faq/README.md#cr-sqlite-write-kenapa-4x-lebih-lambat)
+- [HTTP/3 kenapa tidak worth untuk server-to-server?](faq/README.md#http3-kenapa-tidak-worth-untuk-server-to-server)
+- [HTTP/1.1 masih dipakai di mana?](faq/README.md#http11-masih-dipakai-di-mana)
 
 ### General
 
-- [Mana yang paling sering dipakai di production?](faq/README.md#18-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
+- [Mana yang paling sering dipakai di production?](faq/README.md#19-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
 - [Kenapa pakai in-memory, bukan database beneran?](faq/README.md#project-ini-pakai-in-memory-bukan-database-beneran-kenapa)
 - [Urutan belajar yang recommended?](faq/README.md#urutan-belajar-yang-recommended)
 - [Bisakah skip Expert level?](faq/README.md#bisakah-saya-skip-expert-level)
 
 ## What's Next
 
-Semua 5 level selesai! 🎉 Project ini sekarang punya 17 modul dari Beginner sampai Production, termasuk [walsync](https://github.com/maulanashalihin/walsync) — SQLite WAL shipping replication tool yang sudah di-deploy dan di-benchmark di server real.
+Semua 5 level selesai! 🎉 Project ini sekarang punya 19 modul dari Beginner sampai Production, termasuk [walsync](https://github.com/maulanashalihin/walsync) (SQLite WAL shipping), [cr-sqlite](https://github.com/vlcn-io/cr-sqlite) (CRDT multi-writer replication), dan HTTP/1.1 vs HTTP/2 vs HTTP/3 protocol comparison — semua di-test dan di-benchmark di server real.
 
 **Langkah selanjutnya untuk pendalaman:**
 

@@ -246,7 +246,7 @@ Sync delay = network latency + WAL ship time. walsync debounce WAL changes (50ms
 
 ## General
 
-### 16 teknologi ini, mana yang paling sering dipakai di production?
+### 17 teknologi ini, mana yang paling sering dipakai di production?
 
 Top 5 paling common:
 

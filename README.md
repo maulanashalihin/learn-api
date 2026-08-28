@@ -9,7 +9,7 @@ Project belajar **API technologies** dari Beginner sampai Production. Setiap tek
 | [Learning Map](#learning-map) | 17 modul dari Beginner sampai Production |
 | [Comparison Matrix](#comparison-matrix) | 8 teknologi vs 9 dimensi |
 | [Decision Guide](#decision-guide--which-api-tech-should-i-use) | Flowchart: "tech mana yang harus saya pakai?" |
-| [Scalability Rating](docs/scalability-rating.md) | 16 teknologi dirating across 5 dimensi scalability |
+| [Scalability Rating](docs/scalability-rating.md) | 17 teknologi dirating across 5 dimensi scalability |
 | [SQLite Replication Notes](docs/sqlite-replication-notes.md) | Kafka CDC, Debezium, Litestream WAL, multi-node tools |
 | [FAQ](#faq) | 20+ pertanyaan umum per level |
 
@@ -195,7 +195,7 @@ learn-api/
 │   └── README.md             # FAQ: common questions per level + general
 │
 ├── docs/
-│   ├── scalability-rating.md   # Scalability rating: 16 techs across 5 dimensions
+│   ├── scalability-rating.md   # Scalability rating: 17 techs across 5 dimensions
 │   └── sqlite-replication-notes.md # SQLite replication: Kafka CDC, Debezium, Litestream, multi-node tools
 ├── package.json              # Scripts for all modules
 └── tsconfig.json             # Shared TypeScript config
@@ -321,6 +321,7 @@ Coordinated transaction across resources with blocking?
 
 Scale SQLite reads across multiple servers?
   → walsync (embedded SQLite + async WAL shipping, single-writer + multi-reader)
+```
 
 ## Scalability Rating
 
@@ -336,6 +337,7 @@ Rating scalability semua teknologi across 5 dimensi (horizontal, throughput, sta
 | ... | ... | ... | ... |
 | 15 | Consensus (Raft) | 4.6 | Leader = bottleneck, by design |
 | 16 | Distributed Transactions | 3.6 | Blocking locks, by design |
+| 17 | Scaling SQLite (walsync) | 7.0 | Read replicas scale horizontally, single-writer bottleneck |
 
 ## FAQ
 
@@ -379,7 +381,7 @@ Pertanyaan yang sering muncul, dikelompokkan per level. Lihat: [`faq/README.md`]
 
 ### General
 
-- [Mana yang paling sering dipakai di production?](faq/README.md#16-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
+- [Mana yang paling sering dipakai di production?](faq/README.md#17-teknologi-ini-mana-yang-paling-sering-dipakai-di-production)
 - [Kenapa pakai in-memory, bukan database beneran?](faq/README.md#project-ini-pakai-in-memory-bukan-database-beneran-kenapa)
 - [Urutan belajar yang recommended?](faq/README.md#urutan-belajar-yang-recommended)
 - [Bisakah skip Expert level?](faq/README.md#bisakah-saya-skip-expert-level)

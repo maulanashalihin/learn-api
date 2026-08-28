@@ -1,4 +1,4 @@
-# Scalability Rating — 16 API Technologies Ranked
+# Scalability Rating — 17 API Technologies Ranked
 
 Rating scalability semua teknologi di project ini across 5 dimensi.
 
@@ -32,6 +32,7 @@ Rating scalability semua teknologi di project ini across 5 dimensi.
 | 15 | **Consensus (Raft)** | 4 | 4 | 5 | 4 | 6 | **4.6** |
 | 4 | **SSE** | 5 | 5 | 3 | 4 | 4 | **4.2** |
 | 16 | **Distributed Transactions** | 4 | 3 | 4 | 3 | 4 | **3.6** |
+| 17 | **Scaling SQLite (walsync)** | 8 | 8 | 7 | 8 | 5 | **7.0** |
 
 ## Top 5 — Kenapa?
 
@@ -139,6 +140,20 @@ Coordinator ── PREPARE → Participant A (lock held)
 - **Throughput**: terrible. Every transaction blocks multiple resources
 - **Horizontal**: add participants = slower (more locks, more network)
 - **Kenapa terendah**: by design, 2PC sacrifices everything untuk atomicity
+
+### 17. Scaling SQLite (walsync) — 7.0/10
+
+```
+Primary (writer) ── WAL ship ──→ Replica 1 (reader)
+                              → Replica 2 (reader)
+                              → Replica N (reader)
+```
+
+- **Horizontal**: read replicas scale horizontally (add replica = add read capacity). Single-writer = write tidak scale
+- **Throughput**: 348K read QPS, 84K write QPS per node (embedded SQLite, no TCP overhead)
+- **Geographic**: replicas bisa di region berbeda. WAL ship via HTTP, ~100ms sync delay
+- **Backpressure**: walsync debounce + async ship. Writer gak block kalau replica lambat
+- **Kenapa 7.0**: read scale bagus, tapi single-writer bottleneck. No automatic failover. Eventual consistency
 
 ## Scalability vs Other Priorities
 

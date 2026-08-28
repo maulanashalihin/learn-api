@@ -10,7 +10,7 @@ SQLite adalah database paling kencang untuk single server. Embedded, zero config
 
 1. **Durabilitas** — kalau server mati, data hilang. Bagaimana agar data tidak hilang tanpa pindah ke database lain?
 2. **High availability** — kalau server mati, app down. Bagaimana agar app tetap jalan walau 1 node crash?
-3. **Horizontal scaling** — single server ada batasnya. Bagaimana agar app tetap kencang walau traffic meningkat, tanpa ganti database?
+3. **Horizontal scaling** — single server ada batasnya. Bagaimana agar app tetap kencang walau traffic meningkat, tanpa ganti database? Read scaling bisa dengan read replicas, tapi write scaling susah karena SQLite hanya mengizinkan 1 writer pada satu waktu (database-level lock, bukan row-level).
 
 PostgreSQL/MySQL punya built-in replication untuk masalah ini. SQLite tidak punya. Tidak ada `REPLICATE` command. Jadi butuh tool eksternal.
 
